@@ -64,8 +64,22 @@ async function initNoir() {
 function log(message) {
   const logsDiv = document.getElementById("logs");
   const entry = document.createElement("div");
-  entry.className = "log-entry";
-  entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+  entry.className = "log-entry rounded-lg";
+
+  // Add emoji based on message type
+  let emoji = "📝";
+  if (message.includes("✅")) emoji = "✅";
+  else if (message.includes("❌")) emoji = "❌";
+  else if (message.includes("⚠️")) emoji = "⚠️";
+  else if (message.includes("💡")) emoji = "💡";
+  else if (message.includes("🎉")) emoji = "🎉";
+  else if (message.includes("⏳")) emoji = "⏳";
+  else if (message.includes("🚀")) emoji = "🚀";
+
+  entry.innerHTML = `
+    <span class="text-gray-500 text-sm">[${new Date().toLocaleTimeString()}]</span>
+    <span class="ml-2">${emoji} ${message}</span>
+  `;
   logsDiv.appendChild(entry);
   logsDiv.scrollTop = logsDiv.scrollHeight;
 }
@@ -132,11 +146,16 @@ async function connectWallet() {
     signer = await provider.getSigner();
     const address = await signer.getAddress();
 
-    document.getElementById(
-      "walletInfo"
-    ).innerHTML = `<p>Connected: ${address.slice(0, 6)}...${address.slice(
-      -4
-    )}</p>`;
+    document.getElementById("walletInfo").innerHTML = `
+      <div class="px-4 py-2 bg-gradient-to-r from-green-100 to-emerald-100 rounded-xl border-2 border-green-300">
+        <p class="text-green-800 font-semibold">
+          ✅ Connected: <span class="font-mono">${address.slice(
+            0,
+            6
+          )}...${address.slice(-4)}</span>
+        </p>
+      </div>
+    `;
 
     log(`✅ Connected to wallet: ${address}`);
 
@@ -163,6 +182,10 @@ async function createGame() {
   }
 
   try {
+    const btn = document.getElementById("createGameBtn");
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = "⏳ Creating...";
     log("Creating game...");
     const tx = await contract.createGame();
     log(`Transaction sent: ${tx.hash}`);
@@ -186,9 +209,15 @@ async function createGame() {
       gameState.playerNumber = 1;
       updateGameStatus();
       log(`✅ Game created! Game ID: ${gameState.gameId}`);
+      const btn = document.getElementById("createGameBtn");
+      btn.disabled = false;
+      btn.innerHTML = originalText;
     }
   } catch (error) {
     log(`❌ Error creating game: ${error.message}`);
+    const btn = document.getElementById("createGameBtn");
+    btn.disabled = false;
+    btn.innerHTML = originalText;
   }
 }
 
@@ -206,6 +235,10 @@ async function joinGame() {
   }
 
   try {
+    const btn = document.getElementById("joinGameBtn");
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = "⏳ Joining...";
     log(`Joining game ${gameId}...`);
     const tx = await contract.joinGame(gameId);
     await tx.wait();
@@ -217,8 +250,13 @@ async function joinGame() {
 
     // Start polling for game updates
     startGameResultPolling();
+    btn.disabled = false;
+    btn.innerHTML = originalText;
   } catch (error) {
     log(`❌ Error joining game: ${error.message}`);
+    const btn = document.getElementById("joinGameBtn");
+    btn.disabled = false;
+    btn.innerHTML = originalText;
   }
 }
 
@@ -261,9 +299,17 @@ async function commitMove(move) {
     await tx.wait();
 
     gameState.isCommitted = true;
-    document.getElementById("revealBtn").disabled = false;
+    const revealBtn = document.getElementById("revealBtn");
+    revealBtn.disabled = false;
+    revealBtn.classList.remove("opacity-50", "cursor-not-allowed");
+    revealBtn.classList.add("pulse-animation");
     updateMoveStatus();
     log(`✅ Move committed!`);
+
+    // Remove pulse after animation
+    setTimeout(() => {
+      revealBtn.classList.remove("pulse-animation");
+    }, 2000);
   } catch (error) {
     log(`❌ Error committing move: ${error.message}`);
   }
@@ -286,6 +332,11 @@ async function revealMove() {
     return;
   }
 
+  const btn = document.getElementById("revealBtn");
+  const originalText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = "⏳ Revealing...";
+
   try {
     log("Getting game state from contract...");
 
@@ -300,6 +351,8 @@ async function revealMove() {
 
     if (opponentCommitment === ethers.ZeroHash) {
       log("❌ Opponent hasn't committed yet. Wait for both players to commit.");
+      btn.disabled = false;
+      btn.innerHTML = originalText;
       return;
     }
 
@@ -335,6 +388,8 @@ async function revealMove() {
       setTimeout(() => {
         startGameResultPolling();
       }, 1000);
+      btn.disabled = true;
+      btn.innerHTML = "✅ Revealed";
       return;
     }
 
@@ -402,6 +457,8 @@ async function revealMove() {
       setTimeout(() => {
         startGameResultPolling();
       }, 1000);
+      btn.disabled = true;
+      btn.innerHTML = "✅ Revealed";
     } catch (error) {
       log(`❌ Error generating ZK proof: ${error.message}`);
       console.error(error);
@@ -420,10 +477,14 @@ async function revealMove() {
       setTimeout(() => {
         startGameResultPolling();
       }, 1000);
+      btn.disabled = true;
+      btn.innerHTML = "✅ Revealed";
     }
   } catch (error) {
     log(`❌ Error revealing move: ${error.message}`);
     console.error(error);
+    btn.disabled = false;
+    btn.innerHTML = originalText;
   }
 }
 
@@ -468,12 +529,17 @@ async function updateGameStatus() {
     const statusText = ["Waiting", "Committed", "Revealed", "Completed"][
       game.status
     ];
+    const statusClass = `status-${statusText.toLowerCase()}`;
 
     document.getElementById("gameStatus").innerHTML = `
-      <div class="status ${statusText.toLowerCase()}">
-        <p>Game ID: ${gameState.gameId}</p>
-        <p>Status: ${statusText}</p>
-        <p>You are Player ${gameState.playerNumber}</p>
+      <div class="bg-white rounded-xl p-4 border-2 border-gray-200 slide-up">
+        <div class="flex flex-wrap items-center gap-3 mb-2">
+          <span class="status-badge ${statusClass}">${statusText}</span>
+          <span class="text-gray-600 font-semibold">Game ID: <span class="font-mono text-purple-600">${gameState.gameId}</span></span>
+        </div>
+        <p class="text-gray-700 font-medium">
+          👤 You are <span class="text-purple-600 font-bold">Player ${gameState.playerNumber}</span>
+        </p>
       </div>
     `;
   } catch (error) {
@@ -483,17 +549,39 @@ async function updateGameStatus() {
 
 // Update move status
 function updateMoveStatus() {
-  const moveNames = ["Rock", "Paper", "Scissors"];
+  const moveNames = ["🪨 Rock", "📄 Paper", "✂️ Scissors"];
+  const moveEmojis = ["🪨", "📄", "✂️"];
   document.getElementById("moveStatus").innerHTML = `
-    <p>Move: ${moveNames[gameState.move]}</p>
-    <p>Status: ${gameState.isCommitted ? "Committed ✅" : "Not committed"}</p>
+    <div class="bg-white rounded-xl p-4 border-2 border-gray-200 slide-up">
+      <div class="flex items-center justify-center gap-3">
+        <span class="text-4xl">${moveEmojis[gameState.move]}</span>
+        <div class="text-left">
+          <p class="text-lg font-bold text-gray-800">${
+            moveNames[gameState.move]
+          }</p>
+          <p class="text-sm ${
+            gameState.isCommitted
+              ? "text-green-600 font-semibold"
+              : "text-gray-500"
+          }">
+            ${gameState.isCommitted ? "✅ Committed" : "⏳ Not committed"}
+          </p>
+        </div>
+      </div>
+    </div>
   `;
 }
 
 // Update reveal status
 function updateRevealStatus() {
   document.getElementById("revealStatus").innerHTML = `
-    <p>Status: ${gameState.isRevealed ? "Revealed ✅" : "Not revealed"}</p>
+    <div class="bg-white rounded-xl p-3 border-2 border-gray-200 slide-up">
+      <p class="text-center font-semibold ${
+        gameState.isRevealed ? "text-green-600" : "text-gray-500"
+      }">
+        ${gameState.isRevealed ? "✅ Revealed" : "⏳ Not revealed"}
+      </p>
+    </div>
   `;
 }
 
@@ -520,16 +608,39 @@ async function checkGameResult() {
     const statusText = ["Waiting", "Committed", "Revealed", "Completed"][
       statusNum
     ];
+    const statusClass = `status-${statusText.toLowerCase()}`;
     document.getElementById("gameStatus").innerHTML = `
-      <div class="status ${statusText.toLowerCase()}">
-        <p>Game ID: ${gameState.gameId}</p>
-        <p>Status: ${statusText} (${statusNum})</p>
-        <p>You are Player ${gameState.playerNumber}</p>
-        <p>Player 1 Revealed: ${p1Revealed ? "✅" : "❌"}</p>
-        <p>Player 2 Revealed: ${p2Revealed ? "✅" : "❌"}</p>
+      <div class="bg-white rounded-xl p-4 border-2 border-gray-200 slide-up">
+        <div class="flex flex-wrap items-center gap-3 mb-3">
+          <span class="status-badge ${statusClass}">${statusText}</span>
+          <span class="text-gray-600 font-semibold">Game ID: <span class="font-mono text-purple-600">${
+            gameState.gameId
+          }</span></span>
+        </div>
+        <p class="text-gray-700 font-medium mb-2">
+          👤 You are <span class="text-purple-600 font-bold">Player ${
+            gameState.playerNumber
+          }</span>
+        </p>
+        <div class="flex gap-4 text-sm">
+          <span class="px-2 py-1 rounded ${
+            p1Revealed
+              ? "bg-green-100 text-green-800"
+              : "bg-gray-100 text-gray-600"
+          }">
+            Player 1: ${p1Revealed ? "✅" : "❌"}
+          </span>
+          <span class="px-2 py-1 rounded ${
+            p2Revealed
+              ? "bg-green-100 text-green-800"
+              : "bg-gray-100 text-gray-600"
+          }">
+            Player 2: ${p2Revealed ? "✅" : "❌"}
+          </span>
+        </div>
         ${
           showWarning
-            ? '<p style="color: orange;">⚠️ Both revealed but status not Complete!</p>'
+            ? '<p class="mt-2 text-orange-600 font-semibold">⚠️ Both revealed but status not Complete!</p>'
             : ""
         }
       </div>
@@ -643,50 +754,66 @@ function showGameResult(announcement, winner, game) {
   if (!resultDiv) {
     resultDiv = document.createElement("div");
     resultDiv.id = "gameResult";
-    resultDiv.style.cssText = `
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: white;
-      padding: 40px;
-      border-radius: 15px;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.3);
-      z-index: 1000;
-      text-align: center;
-      max-width: 500px;
-      border: 3px solid #4CAF50;
-    `;
+    resultDiv.className =
+      "fixed inset-0 z-50 flex items-center justify-center p-4";
+    resultDiv.style.cssText =
+      "background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px);";
     document.body.appendChild(resultDiv);
   }
 
   const p1Move = getMoveName(game.player1Move);
   const p2Move = getMoveName(game.player2Move);
 
+  const isWin = winner === gameState.playerNumber;
+  const isTie = winner === 0;
+  const bgGradient = isTie
+    ? "from-yellow-400 to-orange-500"
+    : isWin
+    ? "from-green-400 to-emerald-500"
+    : "from-red-400 to-pink-500";
+
   resultDiv.innerHTML = `
-    <h2 style="font-size: 2.5em; margin: 0 0 20px 0; color: #333;">${announcement}</h2>
-    <div style="margin: 20px 0;">
-      <p style="font-size: 1.2em; margin: 10px 0;"><strong>Player 1:</strong> ${p1Move}</p>
-      <p style="font-size: 1.2em; margin: 10px 0;"><strong>Player 2:</strong> ${p2Move}</p>
+    <div class="game-result-modal bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl border-4 ${
+      isTie
+        ? "border-yellow-400"
+        : isWin
+        ? "border-green-400"
+        : "border-red-400"
+    }">
+      <div class="text-center">
+        <div class="text-6xl mb-4">${isTie ? "🤝" : isWin ? "🎉" : "😔"}</div>
+        <h2 class="game-font text-4xl font-black mb-6 ${
+          isTie ? "text-yellow-600" : isWin ? "text-green-600" : "text-red-600"
+        }">
+          ${announcement}
+        </h2>
+        <div class="bg-gradient-to-r ${bgGradient} rounded-xl p-4 mb-6 text-white">
+          <div class="flex justify-between items-center mb-2">
+            <span class="text-xl font-bold">Player 1</span>
+            <span class="text-3xl">${p1Move}</span>
+          </div>
+          <div class="h-px bg-white opacity-30 my-2"></div>
+          <div class="flex justify-between items-center">
+            <span class="text-xl font-bold">Player 2</span>
+            <span class="text-3xl">${p2Move}</span>
+          </div>
+        </div>
+        <button 
+          onclick="document.getElementById('gameResult')?.remove()" 
+          class="px-8 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold text-lg rounded-xl hover:from-purple-700 hover:to-indigo-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl"
+        >
+          Close
+        </button>
+      </div>
     </div>
-    ${
-      winner === 0
-        ? '<p style="font-size: 1.5em; color: #666;">🤝 It\'s a tie!</p>'
-        : winner === gameState.playerNumber
-        ? '<p style="font-size: 1.5em; color: #4CAF50;">🎉 You won!</p>'
-        : '<p style="font-size: 1.5em; color: #f44336;">😔 You lost</p>'
-    }
-    <button onclick="this.parentElement.remove()" style="
-      margin-top: 20px;
-      padding: 12px 30px;
-      font-size: 16px;
-      background: #4CAF50;
-      color: white;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
-    ">Close</button>
   `;
+
+  // Close on background click
+  resultDiv.addEventListener("click", (e) => {
+    if (e.target === resultDiv) {
+      resultDiv.remove();
+    }
+  });
 }
 
 // Event listeners

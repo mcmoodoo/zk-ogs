@@ -3,131 +3,310 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ZK Rock Paper Scissors</title>
+  <title>🎮 ZK Rock Paper Scissors</title>
+  <script src="https://cdn.tailwindcss.com"></script>
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@400;500;600;700&display=swap');
+    
+    * {
+      font-family: 'Inter', sans-serif;
+    }
+    
+    .game-font {
+      font-family: 'Orbitron', monospace;
+    }
+    
     body {
-      font-family: Arial, sans-serif;
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 20px;
-      background: #f5f5f5;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+      background-attachment: fixed;
+      min-height: 100vh;
     }
-    .container {
-      background: white;
-      padding: 30px;
-      border-radius: 10px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    
+    .glass-card {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
     }
-    h1 {
-      text-align: center;
-      color: #333;
+    
+    .move-btn {
+      transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+      position: relative;
+      overflow: hidden;
     }
-    .game-section {
-      margin: 20px 0;
-      padding: 20px;
-      border: 1px solid #ddd;
-      border-radius: 5px;
+    
+    .move-btn::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 0;
+      height: 0;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.3);
+      transform: translate(-50%, -50%);
+      transition: width 0.6s, height 0.6s;
     }
-    .move-selection {
-      display: flex;
-      gap: 10px;
-      margin: 20px 0;
+    
+    .move-btn:hover::before {
+      width: 300px;
+      height: 300px;
     }
-    button {
-      padding: 15px 30px;
-      font-size: 16px;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
-      background: #4CAF50;
+    
+    .move-btn:hover {
+      transform: translateY(-5px) scale(1.05);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    }
+    
+    .move-btn:active {
+      transform: translateY(-2px) scale(0.98);
+    }
+    
+    .rock-btn {
+      background: linear-gradient(135deg, #8B4513 0%, #A0522D 100%);
+    }
+    
+    .paper-btn {
+      background: linear-gradient(135deg, #4169E1 0%, #6495ED 100%);
+    }
+    
+    .scissors-btn {
+      background: linear-gradient(135deg, #FF6347 0%, #FF7F50 100%);
+    }
+    
+    .pulse-animation {
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: .7;
+      }
+    }
+    
+    .bounce-in {
+      animation: bounceIn 0.6s ease-out;
+    }
+    
+    @keyframes bounceIn {
+      0% {
+        transform: scale(0.3);
+        opacity: 0;
+      }
+      50% {
+        transform: scale(1.05);
+      }
+      70% {
+        transform: scale(0.9);
+      }
+      100% {
+        transform: scale(1);
+        opacity: 1;
+      }
+    }
+    
+    .slide-up {
+      animation: slideUp 0.4s ease-out;
+    }
+    
+    @keyframes slideUp {
+      from {
+        transform: translateY(20px);
+        opacity: 0;
+      }
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+    
+    .status-badge {
+      display: inline-block;
+      padding: 0.5rem 1rem;
+      border-radius: 9999px;
+      font-weight: 600;
+      font-size: 0.875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .status-waiting {
+      background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
       color: white;
     }
-    button:hover {
-      background: #45a049;
+    
+    .status-committed {
+      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+      color: white;
     }
-    button:disabled {
-      background: #ccc;
-      cursor: not-allowed;
+    
+    .status-revealed {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: white;
     }
-    .rock { background: #8B4513; }
-    .paper { background: #4169E1; }
-    .scissors { background: #FF6347; }
-    .logs {
-      background: #f9f9f9;
-      padding: 15px;
-      border-radius: 5px;
-      margin-top: 20px;
-      max-height: 300px;
-      overflow-y: auto;
+    
+    .status-completed {
+      background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+      color: white;
     }
+    
     .log-entry {
-      padding: 5px 0;
-      border-bottom: 1px solid #eee;
+      animation: slideUp 0.3s ease-out;
+      border-left: 3px solid transparent;
+      transition: all 0.2s;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.875rem;
+      line-height: 1.4;
+      padding: 0.375rem 0.75rem;
+      margin-bottom: 0.25rem;
     }
-    input[type="number"] {
-      padding: 10px;
-      font-size: 16px;
-      border: 1px solid #ddd;
-      border-radius: 5px;
-      width: 200px;
+    
+    .log-entry:hover {
+      border-left-color: #667eea;
+      background: rgba(102, 126, 234, 0.05);
     }
-    .status {
-      padding: 10px;
-      margin: 10px 0;
-      border-radius: 5px;
+    
+    .game-result-modal {
+      animation: bounceIn 0.6s ease-out;
     }
-    .status.waiting { background: #fff3cd; }
-    .status.committed { background: #d1ecf1; }
-    .status.revealed { background: #d4edda; }
-    .status.completed { background: #d4edda; }
+    
+    .gradient-text {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    .shimmer {
+      background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0.3) 50%,
+        rgba(255, 255, 255, 0) 100%
+      );
+      background-size: 200% 100%;
+      animation: shimmer 2s infinite;
+    }
+    
+    @keyframes shimmer {
+      0% {
+        background-position: -200% 0;
+      }
+      100% {
+        background-position: 200% 0;
+      }
+    }
   </style>
 </head>
-<body>
-  <div class="container">
-    <h1>🎮 ZK Rock Paper Scissors</h1>
-    
-    <div class="game-section">
-      <h2>Connect Wallet</h2>
-      <button id="connectBtn">Connect Wallet</button>
-      <div id="walletInfo"></div>
-      <div style="margin-top: 10px;">
-        <label>Contract Address (from deployment):</label>
-        <input type="text" id="contractAddressInput" placeholder="0x..." style="width: 400px; padding: 8px;">
-        <button id="setContractBtn">Set Contract</button>
+<body class="py-8 px-4">
+  <div class="max-w-6xl mx-auto space-y-6">
+    <!-- Header -->
+    <div class="glass-card rounded-3xl p-8 text-center bounce-in">
+      <h1 class="game-font text-5xl md:text-6xl font-black mb-4 gradient-text">
+        🎮 ZK Rock Paper Scissors
+      </h1>
+      <p class="text-gray-600 text-lg">Play with Zero-Knowledge proofs on the blockchain</p>
+    </div>
+
+    <!-- Setup Section -->
+    <div class="glass-card rounded-3xl p-6 slide-up">
+      <h2 class="game-font text-2xl font-bold mb-4 text-gray-800 flex items-center gap-2">
+        <span class="text-3xl">⚙️</span> Setup
+      </h2>
+      <div class="space-y-4">
+        <div class="flex flex-wrap gap-3 items-end">
+          <button id="connectBtn" class="px-6 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-semibold rounded-xl hover:from-purple-700 hover:to-indigo-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl">
+            🔗 Connect Wallet
+          </button>
+          <div id="walletInfo" class="flex-1 min-w-[200px]"></div>
+        </div>
+        <div class="flex flex-wrap gap-3 items-end">
+          <input 
+            type="text" 
+            id="contractAddressInput" 
+            placeholder="0x..." 
+            class="flex-1 min-w-[300px] px-4 py-3 border-2 border-gray-300 rounded-xl focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all outline-none"
+          >
+          <button id="setContractBtn" class="px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 text-white font-semibold rounded-xl hover:from-blue-700 hover:to-cyan-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl">
+            📝 Set Contract
+          </button>
+        </div>
       </div>
     </div>
 
-    <div class="game-section">
-      <h2>Game Actions</h2>
-      <button id="createGameBtn">Create Game</button>
-      <button id="joinGameBtn">Join Game</button>
-      <input type="number" id="gameIdInput" placeholder="Game ID">
-      <div id="gameStatus"></div>
-    </div>
-
-    <div class="game-section">
-      <h2>Make Your Move</h2>
-      <div class="move-selection">
-        <button class="rock" id="rockBtn">🪨 Rock</button>
-        <button class="paper" id="paperBtn">📄 Paper</button>
-        <button class="scissors" id="scissorsBtn">✂️ Scissors</button>
+    <!-- Game Actions -->
+    <div class="glass-card rounded-3xl p-6 slide-up">
+      <h2 class="game-font text-2xl font-bold mb-4 text-gray-800 flex items-center gap-2">
+        <span class="text-3xl">🎯</span> Game Actions
+      </h2>
+      <div class="flex flex-wrap gap-3 mb-4">
+        <button id="createGameBtn" class="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-700 hover:to-emerald-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl">
+          ✨ Create Game
+        </button>
+        <div class="flex gap-3 flex-1 min-w-[200px]">
+          <input 
+            type="number" 
+            id="gameIdInput" 
+            placeholder="Enter Game ID" 
+            class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-xl focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all outline-none"
+          >
+          <button id="joinGameBtn" class="px-6 py-3 bg-gradient-to-r from-orange-600 to-red-600 text-white font-semibold rounded-xl hover:from-orange-700 hover:to-red-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl">
+            🚀 Join Game
+          </button>
+        </div>
       </div>
-      <div id="moveStatus"></div>
+      <div id="gameStatus" class="mt-4"></div>
     </div>
 
-    <div class="game-section">
-      <h2>Reveal Move</h2>
-      <button id="revealBtn" disabled>Reveal Move</button>
-      <div id="revealStatus"></div>
+    <!-- Move Selection -->
+    <div class="glass-card rounded-3xl p-6 slide-up">
+      <h2 class="game-font text-2xl font-bold mb-6 text-gray-800 flex items-center gap-2">
+        <span class="text-3xl">✊</span> Make Your Move
+      </h2>
+      <div class="flex flex-wrap justify-center gap-6 mb-6">
+        <button id="rockBtn" class="move-btn rock-btn px-8 py-6 text-white font-bold text-xl rounded-2xl shadow-2xl min-w-[140px]">
+          <span class="text-4xl block mb-2">🪨</span>
+          <span>Rock</span>
+        </button>
+        <button id="paperBtn" class="move-btn paper-btn px-8 py-6 text-white font-bold text-xl rounded-2xl shadow-2xl min-w-[140px]">
+          <span class="text-4xl block mb-2">📄</span>
+          <span>Paper</span>
+        </button>
+        <button id="scissorsBtn" class="move-btn scissors-btn px-8 py-6 text-white font-bold text-xl rounded-2xl shadow-2xl min-w-[140px]">
+          <span class="text-4xl block mb-2">✂️</span>
+          <span>Scissors</span>
+        </button>
+      </div>
+      <div id="moveStatus" class="text-center"></div>
     </div>
 
-    <div class="logs">
-      <h3>Activity Log</h3>
-      <div id="logs"></div>
+    <!-- Reveal Section -->
+    <div class="glass-card rounded-3xl p-6 slide-up">
+      <h2 class="game-font text-2xl font-bold mb-4 text-gray-800 flex items-center gap-2">
+        <span class="text-3xl">🔓</span> Reveal Move
+      </h2>
+      <div class="flex flex-col items-center gap-4">
+        <button id="revealBtn" disabled class="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold text-lg rounded-xl hover:from-purple-700 hover:to-pink-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:hover:shadow-lg">
+          🔓 Reveal Move
+        </button>
+        <div id="revealStatus"></div>
+      </div>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="glass-card rounded-3xl p-6 slide-up">
+      <h2 class="game-font text-2xl font-bold mb-4 text-gray-800 flex items-center gap-2">
+        <span class="text-3xl">📜</span> Activity Log
+      </h2>
+      <div id="logs" class="bg-gray-50 rounded-xl p-3 max-h-96 overflow-y-auto border-2 border-gray-200">
+        <!-- Log entries will be added here -->
+      </div>
     </div>
   </div>
 
   <script type="module" src="/app.js"></script>
 </body>
 </html>
-
