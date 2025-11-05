@@ -1,5 +1,11 @@
 # ZK Rock Paper Scissors Game
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0) 
+![Solidity 0.8.20](https://img.shields.io/badge/Solidity-0.8.20-363636?logo=solidity) 
+![Hardhat 3](https://img.shields.io/badge/Hardhat-3.0-fff100?logo=hardhat&logoColor=black) ![Noir](https://img.shields.io/badge/Noir-ZK-black?logo=aztec&labelColor=000000) 
+![Vite](https://img.shields.io/badge/Vite-4.x-646CFF?logo=vite) 
+![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js)
+
 A fully functional zero-knowledge rock-paper-scissors game where players commit moves, reveal with ZK proofs, and resolve games on-chain. Built with **Noir**, **Barretenberg**, **Hardhat 3**, and **Ethereum**.
 
 ## Overview
@@ -28,7 +34,7 @@ Players generate cryptographic zero-knowledge proofs using Noir circuits that pr
 ### Smart Contract Layer
 
 - **Solidity 0.8.20**: Game logic and state management
-- **Hardhat 3**: Development environment 
+- **Hardhat 3**: Development environment
 
 ### Frontend
 
