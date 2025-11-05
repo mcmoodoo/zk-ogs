@@ -142,7 +142,7 @@ async function connectWallet() {
     }
 
     provider = new ethers.BrowserProvider(window.ethereum);
-    const accounts = await provider.send("eth_requestAccounts", []);
+    await provider.send("eth_requestAccounts", []);
     signer = await provider.getSigner();
     const address = await signer.getAddress();
 
@@ -181,11 +181,12 @@ async function createGame() {
     return;
   }
 
+  const btn = document.getElementById("createGameBtn");
+  const originalText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = "⏳ Creating...";
+
   try {
-    const btn = document.getElementById("createGameBtn");
-    const originalText = btn.innerHTML;
-    btn.disabled = true;
-    btn.innerHTML = "⏳ Creating...";
     log("Creating game...");
     const tx = await contract.createGame();
     log(`Transaction sent: ${tx.hash}`);
@@ -209,13 +210,11 @@ async function createGame() {
       gameState.playerNumber = 1;
       updateGameStatus();
       log(`✅ Game created! Game ID: ${gameState.gameId}`);
-      const btn = document.getElementById("createGameBtn");
       btn.disabled = false;
       btn.innerHTML = originalText;
     }
   } catch (error) {
     log(`❌ Error creating game: ${error.message}`);
-    const btn = document.getElementById("createGameBtn");
     btn.disabled = false;
     btn.innerHTML = originalText;
   }
@@ -234,11 +233,12 @@ async function joinGame() {
     return;
   }
 
+  const btn = document.getElementById("joinGameBtn");
+  const originalText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = "⏳ Joining...";
+
   try {
-    const btn = document.getElementById("joinGameBtn");
-    const originalText = btn.innerHTML;
-    btn.disabled = true;
-    btn.innerHTML = "⏳ Joining...";
     log(`Joining game ${gameId}...`);
     const tx = await contract.joinGame(gameId);
     await tx.wait();
@@ -254,7 +254,6 @@ async function joinGame() {
     btn.innerHTML = originalText;
   } catch (error) {
     log(`❌ Error joining game: ${error.message}`);
-    const btn = document.getElementById("joinGameBtn");
     btn.disabled = false;
     btn.innerHTML = originalText;
   }
@@ -412,7 +411,7 @@ async function revealMove() {
       );
 
       log("Computing witness... ⏳");
-      const { witness, returnValue } = await noir.execute({
+      const { witness } = await noir.execute({
         player1_move: p1Move,
         player2_move: p2Move,
         winner: BigInt(winner),
