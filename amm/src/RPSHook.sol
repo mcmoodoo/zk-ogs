@@ -4,10 +4,11 @@ pragma solidity ^0.8.26;
 import {BaseHook} from "@openzeppelin/uniswap-hooks/src/base/BaseHook.sol";
 
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager, SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 
@@ -176,7 +177,8 @@ contract RPSHook is BaseHook {
         Currency currencyOut = params.zeroForOne ? key.currency1 : key.currency0;
         
         // Check for matching order (CoW)
-        bytes32 matchingKey = _findMatchingOrder(poolId, currencyIn, currencyOut, params.amountSpecified, params.zeroForOne);
+        uint256 amountIn = params.amountSpecified > 0 ? uint256(params.amountSpecified) : uint256(-params.amountSpecified);
+        bytes32 matchingKey = _findMatchingOrder(poolId, currencyIn, currencyOut, amountIn, params.zeroForOne);
         
         if (matchingKey != bytes32(0)) {
             // Order will be matched in afterSwap
@@ -306,13 +308,26 @@ contract RPSHook is BaseHook {
         return (BaseHook.afterSwap.selector, 0);
     }
 
+    /**
+     * @notice Hook called after swap to return a modified delta
+     */
+    function afterSwapReturnDelta(
+        address swapper,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        bytes calldata hookData
+    ) external onlyPoolManager returns (bytes4, BalanceDelta) {
+        return _afterSwapReturnDelta(swapper, key, params, delta, hookData);
+    }
+
     function _afterSwapReturnDelta(
         address swapper,
         PoolKey calldata key,
         SwapParams calldata params,
         BalanceDelta delta,
         bytes calldata hookData
-    ) internal override returns (bytes4, BalanceDelta) {
+    ) internal returns (bytes4, BalanceDelta) {
         PoolId poolId = key.toId();
         RPSPosition rpsPosition = _decodeRPSPosition(hookData);
         
@@ -338,8 +353,8 @@ contract RPSHook is BaseHook {
             
             // Modify delta: hook receives the output tokens
             // Positive delta for hook means hook receives tokens from pool manager
-            int256 inputAmount = params.zeroForOne ? delta.amount0() : delta.amount1();
-            int256 outputAmount = params.zeroForOne ? delta.amount1() : delta.amount0();
+            int128 inputAmount = params.zeroForOne ? BalanceDeltaLibrary.amount0(delta) : BalanceDeltaLibrary.amount1(delta);
+            int128 outputAmount = params.zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
             
             // We want hook to receive: swapAmount * 2 (for both players) + totalPrize (for winner)
             uint256 totalOutput = swapAmount * 2 + totalPrize;
@@ -348,25 +363,19 @@ contract RPSHook is BaseHook {
             if (params.zeroForOne) {
                 // amount0 is input (negative), amount1 is output (positive)
                 // Modify to send output to hook
-                newDelta = BalanceDelta({
-                    amount0: inputAmount, // Negative (taken from swapper)
-                    amount1: int128(int256(totalOutput)) // Positive (to hook)
-                });
+                newDelta = toBalanceDelta(inputAmount, int128(int256(totalOutput)));
             } else {
-                newDelta = BalanceDelta({
-                    amount0: int128(int256(totalOutput)), // Positive (to hook)
-                    amount1: inputAmount // Negative (taken from swapper)
-                });
+                newDelta = toBalanceDelta(int128(int256(totalOutput)), inputAmount);
             }
             
             // Track hook's balance
             hookBalances[poolId][currencyOut] += totalOutput;
             
-            return (BaseHook.afterSwapReturnDelta.selector, newDelta);
+            return (this.afterSwapReturnDelta.selector, newDelta);
         } else {
             // No match - first player: take input, don't give output yet
             // Modify delta to prevent output (hook will hold input tokens)
-            int256 inputAmount = params.zeroForOne ? delta.amount0() : delta.amount1();
+            int128 inputAmount = params.zeroForOne ? BalanceDeltaLibrary.amount0(delta) : BalanceDeltaLibrary.amount1(delta);
             
             // Calculate amounts
             uint256 swapAmount = (amountIn * SWAP_PERCENTAGE) / BASIS_POINTS; // 95%
@@ -377,21 +386,15 @@ contract RPSHook is BaseHook {
             // So we return delta with 0 output
             BalanceDelta newDelta;
             if (params.zeroForOne) {
-                newDelta = BalanceDelta({
-                    amount0: inputAmount, // Negative (taken from swapper)
-                    amount1: 0 // No output yet - swap doesn't execute
-                });
+                newDelta = toBalanceDelta(inputAmount, int128(0));
             } else {
-                newDelta = BalanceDelta({
-                    amount0: 0, // No output yet - swap doesn't execute
-                    amount1: inputAmount // Negative (taken from swapper)
-                });
+                newDelta = toBalanceDelta(int128(0), inputAmount);
             }
             
             // Track hook's balance (input tokens are held)
             hookBalances[poolId][currencyIn] += amountIn;
             
-            return (BaseHook.afterSwapReturnDelta.selector, newDelta);
+            return (this.afterSwapReturnDelta.selector, newDelta);
         }
     }
 
@@ -418,7 +421,7 @@ contract RPSHook is BaseHook {
         // Transfer tokens from hook to user
         // The hook should have received these tokens from the pool manager
         // via the positive delta in afterSwapReturnDelta
-        if (Currency.unwrap(currency) == 0) {
+        if (Currency.unwrap(currency) == address(0)) {
             // Native ETH - hook must have ETH balance
             require(address(this).balance >= amount, "Insufficient ETH balance");
             (bool success,) = msg.sender.call{value: amount}("");

@@ -1,0 +1,9 @@
+[submodule "amm/lib/forge-std"]
+	path = amm/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+[submodule "amm/lib/uniswap-hooks"]
+	path = amm/lib/uniswap-hooks
+	url = https://github.com/openzeppelin/uniswap-hooks
+[submodule "amm/lib/hookmate"]
+	path = amm/lib/hookmate
+	url = https://github.com/akshatmittal/hookmate
