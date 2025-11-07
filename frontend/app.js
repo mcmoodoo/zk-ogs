@@ -380,7 +380,8 @@ async function createGame() {
       log("⏳ Waiting for Player 2 to join...");
 
       updateGameStatus();
-      updateMoveStatus();
+      // Don't show "Committed" status in Step 2 after game creation - it's already in logs
+      // updateMoveStatus();
       updateRevealStatus();
       updateButtonStates(); // Disable create button after game is created
       updateStepCheckmarks(); // Update step checkmarks
@@ -938,29 +939,10 @@ function updateMoveStatus() {
     return;
   }
 
-  // Only show status if move is committed, otherwise the border on the button shows selection
-  if (gameState.isCommitted) {
-    const moveNames = ["🪨 Rock", "📄 Paper", "✂️ Scissors"];
-    const moveEmojis = ["🪨", "📄", "✂️"];
-    moveStatusDiv.innerHTML = `
-      <div class="bg-white rounded-xl p-4 border-2 border-gray-200 slide-up">
-        <div class="flex items-center justify-center gap-3">
-          <span class="text-4xl">${moveEmojis[gameState.move]}</span>
-          <div class="text-left">
-            <p class="text-lg font-bold text-gray-800">${
-              moveNames[gameState.move]
-            }</p>
-            <p class="text-sm text-green-600 font-semibold">
-              ✅ Committed
-            </p>
-          </div>
-        </div>
-      </div>
-    `;
-  } else {
-    // Clear the status div when move is selected but not committed
-    moveStatusDiv.innerHTML = "";
-  }
+  // Don't show "Committed" status - the border on the button shows selection
+  // The commit status is already logged, no need to show it in the UI
+  // Clear the status div - move selection is indicated by button border
+  moveStatusDiv.innerHTML = "";
 }
 
 // Update reveal status
@@ -978,8 +960,20 @@ async function checkGameResult() {
 
   try {
     const game = await contract.getGame(gameState.gameId);
-    // Game struct is an array: status is at index 3
-    const statusNum = Number(game[3] || game.status);
+
+    // Safely access struct fields - handle both array and object formats
+    const isArray =
+      Array.isArray(game) ||
+      (typeof game === "object" && game.length !== undefined);
+
+    // Safely get status
+    let statusValue;
+    if (isArray && game.length > 3) {
+      statusValue = game[3];
+    } else {
+      statusValue = game.status;
+    }
+    const statusNum = Number(statusValue);
 
     // Update game status display (includes deadline info)
     await updateGameStatus();
@@ -1034,28 +1028,40 @@ async function checkGameResult() {
         deadlinePollInterval = null;
       }
 
-      // Show result
-      const winnerNum = Number(game.winner);
-      let winnerText = "";
-      let announcement = "";
-
-      if (winnerNum === 0) {
-        winnerText = "Tie";
-        announcement = "🤝 It's a TIE!";
-      } else if (winnerNum === gameState.playerNumber) {
-        winnerText = "You";
-        announcement = "🎉 YOU WIN! 🎉";
+      // Show result - only show modal when game is actually completed (both moves revealed)
+      // Safely access winner field
+      let winnerValue;
+      if (isArray && game.length > 7) {
+        winnerValue = game[7];
       } else {
-        winnerText = `Player ${winnerNum}`;
-        announcement = "😔 You lost. Better luck next time!";
+        winnerValue = game.winner;
       }
+      const winnerNum = Number(winnerValue);
 
-      // Show big announcement (only if not already shown)
-      if (!document.getElementById("gameResult")) {
-        showGameResult(announcement, winnerNum, game);
+      // Only show modal if game is truly completed (winner is set, not just status 3)
+      // This prevents showing modal when game is just created
+      if (winnerNum !== undefined && winnerNum !== null) {
+        let winnerText = "";
+        let announcement = "";
+
+        if (winnerNum === 0) {
+          winnerText = "Tie";
+          announcement = "🤝 It's a TIE!";
+        } else if (winnerNum === gameState.playerNumber) {
+          winnerText = "You";
+          announcement = "🎉 YOU WIN! 🎉";
+        } else {
+          winnerText = `Player ${winnerNum}`;
+          announcement = "😔 You lost. Better luck next time!";
+        }
+
+        // Show big announcement (only if not already shown and game is truly completed)
+        if (!document.getElementById("gameResult")) {
+          showGameResult(announcement, winnerNum, game);
+        }
+
+        log(`🎉 Game completed! Winner: ${winnerText}`);
       }
-
-      log(`🎉 Game completed! Winner: ${winnerText}`);
       // Game struct is an array: player1Move is at index 5
       log(`Player 1 played: ${getMoveName(game[5] || game.player1Move)}`);
       // Game struct is an array: player2Move is at index 6
@@ -1433,7 +1439,7 @@ function addRevealButton() {
         id="revealBtn"
         class="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-700 hover:to-emerald-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl"
       >
-        🔓 Reveal Move
+        🔓 Resolve Game
       </button>
     `;
     document.getElementById("revealBtn").addEventListener("click", resolveGame);
