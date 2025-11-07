@@ -1168,30 +1168,53 @@ async function init() {
     // Load contract address from addresses.json
     // Detect environment: use localhost only if we're on localhost, otherwise use sepolia
     try {
+      log(
+        `🔍 Loading addresses.json from ${window.location.origin}/addresses.json`
+      );
       const addressesResponse = await fetch("/addresses.json");
+      log(
+        `📡 Response status: ${addressesResponse.status} ${addressesResponse.statusText}`
+      );
+
       if (addressesResponse.ok) {
         const addresses = await addressesResponse.json();
+        log(`📋 Loaded addresses.json:`, addresses);
         const isLocalhost =
           window.location.hostname === "localhost" ||
           window.location.hostname === "127.0.0.1";
+        log(
+          `🌐 Environment: ${isLocalhost ? "localhost" : "production/sepolia"}`
+        );
 
         // Check localhost first only if we're actually on localhost
         if (isLocalhost && addresses.localhost?.rockPaperScissors) {
           CONTRACT_ADDRESS = addresses.localhost.rockPaperScissors;
-          document.getElementById("contractAddressInput").value =
-            CONTRACT_ADDRESS;
-          log(`✅ Loaded localhost contract address: ${CONTRACT_ADDRESS}`);
+          const inputEl = document.getElementById("contractAddressInput");
+          if (inputEl) {
+            inputEl.value = CONTRACT_ADDRESS;
+            log(`✅ Loaded localhost contract address: ${CONTRACT_ADDRESS}`);
+          } else {
+            log(`⚠️ Contract address input field not found`);
+          }
         } else if (addresses.sepolia?.rockPaperScissors) {
           CONTRACT_ADDRESS = addresses.sepolia.rockPaperScissors;
-          document.getElementById("contractAddressInput").value =
-            CONTRACT_ADDRESS;
-          log(`✅ Loaded Sepolia contract address: ${CONTRACT_ADDRESS}`);
+          const inputEl = document.getElementById("contractAddressInput");
+          if (inputEl) {
+            inputEl.value = CONTRACT_ADDRESS;
+            log(`✅ Loaded Sepolia contract address: ${CONTRACT_ADDRESS}`);
+          } else {
+            log(`⚠️ Contract address input field not found`);
+          }
         } else {
           log(
             `⚠️ No contract address found in addresses.json for ${
               isLocalhost ? "localhost" : "sepolia"
             }`
           );
+          log(`📋 Available addresses:`, {
+            localhost: addresses.localhost?.rockPaperScissors || "empty",
+            sepolia: addresses.sepolia?.rockPaperScissors || "empty",
+          });
         }
       } else {
         log(
