@@ -435,9 +435,9 @@ function clearMoveButtonBorders() {
     if (btn) {
       btn.classList.remove(
         "border-4",
-        "border-yellow-400",
+        "border-green-400",
         "ring-4",
-        "ring-yellow-200"
+        "ring-green-200"
       );
     }
   });
@@ -462,17 +462,17 @@ function selectMove(move) {
         // Add border to selected button
         btn.classList.add(
           "border-4",
-          "border-yellow-400",
+          "border-green-400",
           "ring-4",
-          "ring-yellow-200"
+          "ring-green-200"
         );
       } else {
         // Remove border from other buttons
         btn.classList.remove(
           "border-4",
-          "border-yellow-400",
+          "border-green-400",
           "ring-4",
-          "ring-yellow-200"
+          "ring-green-200"
         );
       }
     }
