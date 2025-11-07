@@ -14,6 +14,7 @@ let gameState = {
   commitment: null,
   isCommitted: false,
   isRevealed: false,
+  isResolving: false, // Flag to prevent multiple simultaneous resolves
 };
 
 let noir = null;
@@ -56,6 +57,7 @@ async function initNoir() {
   } catch (error) {
     log(`❌ Error initializing Noir: ${error.message}`);
     log("💡 Make sure circuit.json exists in frontend/target/");
+    console.error("Noir initialization error:", error);
     throw error;
   }
 }
@@ -175,10 +177,16 @@ async function connectWallet() {
   }
 }
 
-// Create game
+// Create game - Player 1 must select move first
 async function createGame() {
   if (!contract) {
     log("❌ Contract not loaded. Please deploy contract first.");
+    return;
+  }
+
+  // Check if move is already selected
+  if (gameState.move === null || gameState.move === undefined) {
+    log("❌ Please select your move first (Rock, Paper, or Scissors)");
     return;
   }
 
@@ -188,8 +196,33 @@ async function createGame() {
   btn.innerHTML = "⏳ Creating...";
 
   try {
-    log("Creating game...");
-    const tx = await contract.createGame();
+    // Generate random salt
+    const salt = ethers.randomBytes(32);
+    const saltField = ethers.hexlify(salt);
+
+    // Create Keccak256 commitment (for contract verification)
+    const commitment = ethers.keccak256(
+      ethers.solidityPacked(["uint8", "bytes32"], [gameState.move, saltField])
+    );
+
+    log(
+      `Move: ${
+        gameState.move === 0
+          ? "Rock"
+          : gameState.move === 1
+          ? "Paper"
+          : "Scissors"
+      }`
+    );
+    log(`Commitment: ${commitment.slice(0, 10)}...`);
+    log("Creating game with committed move (Player 1)...");
+
+    // Store move and salt locally for later reveal
+    gameState.salt = saltField;
+    gameState.commitment = commitment;
+    gameState.isCommitted = true;
+
+    const tx = await contract.createGame(commitment);
     log(`Transaction sent: ${tx.hash}`);
 
     const receipt = await tx.wait();
@@ -210,7 +243,14 @@ async function createGame() {
       gameState.gameId = parsed.args.gameId.toString();
       gameState.playerNumber = 1;
       updateGameStatus();
+      updateMoveStatus();
+      updateRevealStatus();
+      updateButtonStates(); // Disable create button after game is created
       log(`✅ Game created! Game ID: ${gameState.gameId}`);
+      log("⏳ Waiting for Player 2 to join...");
+
+      // Start polling for game updates
+      startGameResultPolling();
       btn.disabled = false;
       btn.innerHTML = originalText;
     }
@@ -221,7 +261,7 @@ async function createGame() {
   }
 }
 
-// Join game
+// Join game - Player 2 must select move first
 async function joinGame() {
   if (!contract) {
     log("❌ Contract not loaded.");
@@ -234,23 +274,65 @@ async function joinGame() {
     return;
   }
 
+  // Check if move is already selected
+  if (gameState.move === null || gameState.move === undefined) {
+    log("❌ Please select your move first (Rock, Paper, or Scissors)");
+    return;
+  }
+
   const btn = document.getElementById("joinGameBtn");
   const originalText = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = "⏳ Joining...";
 
   try {
-    log(`Joining game ${gameId}...`);
-    const tx = await contract.joinGame(gameId);
-    await tx.wait();
+    log(
+      `Joining game ${gameId} as Player 2 with move: ${
+        gameState.move === 0
+          ? "Rock"
+          : gameState.move === 1
+          ? "Paper"
+          : "Scissors"
+      }...`
+    );
+    log(
+      "💡 Note: Player 2's move is submitted directly (no commit/reveal needed)"
+    );
+    const tx = await contract.joinGame(gameId, gameState.move);
+    const receipt = await tx.wait();
 
     gameState.gameId = gameId;
     gameState.playerNumber = 2;
-    await updateGameStatus();
-    log(`✅ Joined game ${gameId}`);
 
-    // Start polling for game updates
+    // Get deadline from event
+    const event = receipt.logs.find((log) => {
+      try {
+        const parsed = contract.interface.parseLog(log);
+        return parsed && parsed.name === "PlayerJoined";
+      } catch {
+        return false;
+      }
+    });
+
+    if (event) {
+      const parsed = contract.interface.parseLog(event);
+      const deadline = Number(parsed.args.revealDeadline);
+      log(`✅ Joined game ${gameId}`);
+      log(
+        `⏰ Player 1 has until ${new Date(
+          deadline * 1000
+        ).toLocaleTimeString()} to reveal`
+      );
+    }
+
+    await updateGameStatus();
+    updateMoveStatus();
+    updateRevealStatus();
+    updateButtonStates(); // Update button states after joining
+
+    // Start polling for game updates and deadline checking
     startGameResultPolling();
+    startDeadlinePolling();
     btn.disabled = false;
     btn.innerHTML = originalText;
   } catch (error) {
@@ -260,233 +342,71 @@ async function joinGame() {
   }
 }
 
-// Commit move
-async function commitMove(move) {
-  if (!contract || !noir || !backend) {
-    log("❌ Noir or contract not initialized");
-    return;
-  }
+// Select move (for both players)
+// For Player 1: stores move locally, will be committed when creating game
+// For Player 2: stores move locally, will be submitted when joining game
+function selectMove(move) {
+  gameState.move = move;
+  updateMoveStatus();
+  updateButtonStates();
+  log(
+    `✅ Move selected: ${
+      move === 0 ? "Rock" : move === 1 ? "Paper" : "Scissors"
+    }`
+  );
 
-  if (gameState.isCommitted) {
-    log("❌ Move already committed");
-    return;
-  }
-
-  try {
-    // Generate random salt
-    const salt = ethers.randomBytes(32);
-    const saltField = ethers.hexlify(salt);
-
-    // Create Keccak256 commitment (for contract verification)
-    const commitment = ethers.keccak256(
-      ethers.solidityPacked(["uint8", "bytes32"], [move, saltField])
-    );
-
-    log(`Move: ${move === 0 ? "Rock" : move === 1 ? "Paper" : "Scissors"}`);
-    log(`Commitment: ${commitment.slice(0, 10)}...`);
-
-    gameState.move = move;
-    gameState.salt = saltField;
-    gameState.commitment = commitment;
-
-    log(
-      `Committing move ${
-        move === 0 ? "Rock" : move === 1 ? "Paper" : "Scissors"
-      }...`
-    );
-
-    const tx = await contract.commitMove(gameState.gameId, commitment);
-    await tx.wait();
-
-    gameState.isCommitted = true;
-    // Start auto-reveal watcher
-    startAutoRevealWatcher();
-    const revealBtn = document.getElementById("revealBtn");
-    revealBtn.disabled = false;
-    revealBtn.classList.remove("opacity-50", "cursor-not-allowed");
-    revealBtn.classList.add("pulse-animation");
-    updateMoveStatus();
-    log(`✅ Move committed!`);
-
-    // Remove pulse after animation
-    setTimeout(() => {
-      revealBtn.classList.remove("pulse-animation");
-    }, 2000);
-  } catch (error) {
-    log(`❌ Error committing move: ${error.message}`);
+  if (!gameState.gameId) {
+    log("💡 Now you can click 'Create Game' to create a game with this move");
+  } else if (gameState.playerNumber === 2) {
+    log("💡 Now you can click 'Join Game' to join with this move");
   }
 }
 
-// Reveal move with ZK proof
-async function revealMove() {
-  if (!contract || !noir || !backend) {
-    log("❌ Noir or contract not initialized");
-    return;
-  }
+// Update button states based on move selection
+function updateButtonStates() {
+  const createBtn = document.getElementById("createGameBtn");
+  const joinBtn = document.getElementById("joinGameBtn");
 
-  if (!gameState.isCommitted) {
-    log("❌ Move not committed yet");
-    return;
-  }
+  const hasMove = gameState.move !== null && gameState.move !== undefined;
+  const hasGameId = gameState.gameId !== null;
 
-  if (gameState.isRevealed) {
-    log("❌ Move already revealed");
-    return;
-  }
-
-  const btn = document.getElementById("revealBtn");
-  const originalText = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = "⏳ Revealing...";
-
-  try {
-    log("Getting game state from contract...");
-
-    // Get current game state
-    const game = await contract.getGame(gameState.gameId);
-
-    // Get opponent's commitment
-    const opponentCommitment =
-      gameState.playerNumber === 1
-        ? game.player2Commitment
-        : game.player1Commitment;
-
-    if (opponentCommitment === ethers.ZeroHash) {
-      log("❌ Opponent hasn't committed yet. Wait for both players to commit.");
-      btn.disabled = false;
-      btn.innerHTML = originalText;
-      return;
+  if (createBtn) {
+    if (hasMove && !hasGameId) {
+      // Enable create button if move selected and no game yet
+      createBtn.disabled = false;
+      createBtn.className =
+        "px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-700 hover:to-emerald-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl";
+      createBtn.innerHTML = "✨ Create Game";
+    } else if (!hasMove) {
+      // Disable if no move selected
+      createBtn.disabled = true;
+      createBtn.className =
+        "px-6 py-3 bg-gray-400 text-white font-semibold rounded-xl cursor-not-allowed transition-all duration-200";
+      createBtn.innerHTML = "✨ Create Game (Select move first)";
     }
+  }
 
-    // Check if opponent has already revealed
-    const opponentMove =
-      gameState.playerNumber === 1 ? game.player2Move : game.player1Move;
+  if (joinBtn) {
+    const gameIdInput = document.getElementById("gameIdInput");
+    const hasGameIdInput = gameIdInput && gameIdInput.value.trim() !== "";
 
-    // Check if opponent has revealed (player1Move or player2Move will be set if revealed)
-    const hasOpponentRevealed =
-      gameState.playerNumber === 1
-        ? game.player2Move !== 255
-        : game.player1Move !== 255;
-
-    if (!hasOpponentRevealed) {
-      // Opponent hasn't revealed yet - we can reveal first
-      // The contract will verify our commitment matches
-      log("Revealing move (contract will verify commitment)...");
-
-      const tx = await contract.revealMove(
-        gameState.gameId,
-        gameState.move,
-        gameState.salt,
-        "0x" // Empty proof for now - contract will verify commitment
-      );
-
-      const receipt = await tx.wait();
-      log(`✅ Move revealed! Transaction: ${receipt.hash}`);
-
-      gameState.isRevealed = true;
-      updateRevealStatus();
-
-      // Start polling for game result
-      setTimeout(() => {
-        startGameResultPolling();
-      }, 1000);
-      btn.disabled = true;
-      btn.innerHTML = "✅ Revealed";
-      return;
-    }
-
-    // Generate ZK proof that proves the winner calculation is correct
-    // The contract already verifies commitments using Keccak256
-    // The ZK proof proves the winner matches the circuit's determine_winner logic
-    log("Generating ZK proof for winner calculation... ⏳");
-
-    try {
-      // Calculate expected winner (matches contract's _determineWinner)
-      const winner = determineWinnerLocal(gameState.move, opponentMove);
-
-      // Prepare inputs for the simplified circuit
-      // Circuit now only needs moves and winner (no commitments/salts)
-      const p1Move = BigInt(
-        gameState.playerNumber === 1 ? gameState.move : opponentMove
-      );
-      const p2Move = BigInt(
-        gameState.playerNumber === 1 ? opponentMove : gameState.move
-      );
-
-      log("Computing witness... ⏳");
-      const { witness } = await noir.execute({
-        player1_move: p1Move,
-        player2_move: p2Move,
-        winner: BigInt(winner),
-      });
-
-      log("Generating proof... ⏳");
-      const proof = await backend.generateProof(witness);
-
-      log("Verifying proof locally... ⏳");
-      const isValid = await backend.verifyProof(proof);
-
-      if (!isValid) {
-        log("❌ Proof verification failed locally");
-        throw new Error("Proof verification failed");
+    if (hasMove && hasGameIdInput) {
+      // Enable join button if move selected and game ID entered
+      joinBtn.disabled = false;
+      joinBtn.className =
+        "px-6 py-3 bg-gradient-to-r from-orange-600 to-red-600 text-white font-semibold rounded-xl hover:from-orange-700 hover:to-red-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl";
+      joinBtn.innerHTML = "🚀 Join Game";
+    } else {
+      // Disable if no move or no game ID
+      joinBtn.disabled = true;
+      joinBtn.className =
+        "px-6 py-3 bg-gray-400 text-white font-semibold rounded-xl cursor-not-allowed transition-all duration-200";
+      if (!hasMove) {
+        joinBtn.innerHTML = "🚀 Join Game (Select move first)";
+      } else {
+        joinBtn.innerHTML = "🚀 Join Game";
       }
-
-      log(
-        `✅ ZK proof generated and verified! Winner: ${
-          winner === 0 ? "Tie" : `Player ${winner}`
-        }`
-      );
-
-      // Serialize proof for contract
-      // The proof object should have a serialized format
-      const proofBytes = await serializeProof(proof);
-
-      // Reveal move on contract with ZK proof
-      const tx = await contract.revealMove(
-        gameState.gameId,
-        gameState.move,
-        gameState.salt,
-        proofBytes || "0x"
-      );
-
-      const receipt = await tx.wait();
-      log(`✅ Move revealed! Transaction: ${receipt.hash}`);
-
-      gameState.isRevealed = true;
-      updateRevealStatus();
-
-      // Start polling for game result
-      setTimeout(() => {
-        startGameResultPolling();
-      }, 1000);
-      btn.disabled = true;
-      btn.innerHTML = "✅ Revealed";
-    } catch (error) {
-      log(`❌ Error generating ZK proof: ${error.message}`);
-      console.error(error);
-      // Fallback: reveal without proof
-      log("Attempting to reveal without ZK proof...");
-      const tx = await contract.revealMove(
-        gameState.gameId,
-        gameState.move,
-        gameState.salt,
-        "0x"
-      );
-      const receipt = await tx.wait();
-      log(`✅ Move revealed! Transaction: ${receipt.hash}`);
-      gameState.isRevealed = true;
-      updateRevealStatus();
-      setTimeout(() => {
-        startGameResultPolling();
-      }, 1000);
-      btn.disabled = true;
-      btn.innerHTML = "✅ Revealed";
     }
-  } catch (error) {
-    log(`❌ Error revealing move: ${error.message}`);
-    console.error(error);
-    btn.disabled = false;
-    btn.innerHTML = originalText;
   }
 }
 
@@ -502,23 +422,69 @@ function determineWinnerLocal(move1, move2) {
 
 // Serialize proof for contract
 async function serializeProof(proof) {
-  // Convert proof object to bytes
-  // The proof format depends on the backend
-  // For Barretenberg/Noir, we typically need to serialize the proof
+  // Barretenberg proof format: proof is a Uint8Array or similar
+  // The backend.generateProof returns a proof that needs to be serialized
   try {
-    // The proof object should have a way to serialize
-    // Check if it has a toBytes() method or similar
+    // Check if proof is already bytes/hex
+    if (typeof proof === "string" && proof.startsWith("0x")) {
+      return proof;
+    }
+
+    // Check if it's a Uint8Array
+    if (proof instanceof Uint8Array) {
+      return ethers.hexlify(proof);
+    }
+
+    // Barretenberg bb.js proof format: check for proof.proof (raw bytes)
     if (proof.proof) {
-      return proof.proof;
+      if (proof.proof instanceof Uint8Array) {
+        return ethers.hexlify(proof.proof);
+      }
+      // If proof.proof is an object, try to get its bytes
+      if (proof.proof.bytes && proof.proof.bytes instanceof Uint8Array) {
+        return ethers.hexlify(proof.proof.bytes);
+      }
     }
-    if (proof.toBytes) {
-      return proof.toBytes();
+
+    // Check if it has a serialized property
+    if (proof.serialized) {
+      if (proof.serialized instanceof Uint8Array) {
+        return ethers.hexlify(proof.serialized);
+      }
+      if (typeof proof.serialized === "string") {
+        return proof.serialized;
+      }
     }
-    // Fallback: try to serialize as hex
-    return "0x" + JSON.stringify(proof).slice(0, 100); // Placeholder
+
+    // Try to get bytes from the proof object
+    // Barretenberg proofs are typically Uint8Array
+    if (proof.bytes) {
+      if (proof.bytes instanceof Uint8Array) {
+        return ethers.hexlify(proof.bytes);
+      }
+      if (typeof proof.bytes === "string") {
+        return proof.bytes;
+      }
+    }
+
+    // Check for ArrayBuffer
+    if (proof instanceof ArrayBuffer) {
+      return ethers.hexlify(new Uint8Array(proof));
+    }
+
+    // Last resort: log the proof structure for debugging
+    console.log("Proof structure:", proof);
+    console.log("Proof type:", typeof proof);
+    console.log("Proof keys:", Object.keys(proof || {}));
+    if (proof.proof) {
+      console.log("proof.proof type:", typeof proof.proof);
+      console.log("proof.proof keys:", Object.keys(proof.proof || {}));
+    }
+
+    throw new Error("Could not serialize proof - unknown format");
   } catch (error) {
     console.error("Error serializing proof:", error);
-    return "0x";
+    throw error; // Don't return empty proof, throw so caller knows it failed
   }
 }
 
@@ -533,6 +499,29 @@ async function updateGameStatus() {
     ];
     const statusClass = `status-${statusText.toLowerCase()}`;
 
+    let deadlineHtml = "";
+    if (game.revealDeadline > 0 && game.status !== 3) {
+      const deadline = Number(game.revealDeadline);
+      const now = Math.floor(Date.now() / 1000);
+      const timeRemaining = deadline - now;
+      const minutes = Math.floor(timeRemaining / 60);
+      const seconds = timeRemaining % 60;
+      const timeStr = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+      const isUrgent = timeRemaining < 60;
+
+      deadlineHtml = `
+        <div class="mt-3 p-3 bg-${
+          isUrgent ? "red" : "yellow"
+        }-50 border border-${isUrgent ? "red" : "yellow"}-200 rounded-lg">
+          <p class="text-${
+            isUrgent ? "red" : "yellow"
+          }-800 font-semibold text-sm">
+            ⏰ Deadline: ${timeStr} remaining
+          </p>
+        </div>
+      `;
+    }
+
     document.getElementById("gameStatus").innerHTML = `
       <div class="bg-white rounded-xl p-4 border-2 border-gray-200 slide-up">
         <div class="flex flex-wrap items-center gap-3 mb-2">
@@ -542,6 +531,7 @@ async function updateGameStatus() {
         <p class="text-gray-700 font-medium">
           👤 You are <span class="text-purple-600 font-bold">Player ${gameState.playerNumber}</span>
         </p>
+        ${deadlineHtml}
       </div>
     `;
   } catch (error) {
@@ -551,9 +541,23 @@ async function updateGameStatus() {
 
 // Update move status
 function updateMoveStatus() {
+  const moveStatusDiv = document.getElementById("moveStatus");
+  if (!moveStatusDiv) return;
+
+  if (gameState.move === null || gameState.move === undefined) {
+    moveStatusDiv.innerHTML = `
+      <div class="bg-gray-50 rounded-xl p-4 border-2 border-gray-200">
+        <p class="text-gray-600 text-center">
+          ⚠️ No move selected yet. Please select Rock, Paper, or Scissors above.
+        </p>
+      </div>
+    `;
+    return;
+  }
+
   const moveNames = ["🪨 Rock", "📄 Paper", "✂️ Scissors"];
   const moveEmojis = ["🪨", "📄", "✂️"];
-  document.getElementById("moveStatus").innerHTML = `
+  moveStatusDiv.innerHTML = `
     <div class="bg-white rounded-xl p-4 border-2 border-gray-200 slide-up">
       <div class="flex items-center justify-center gap-3">
         <span class="text-4xl">${moveEmojis[gameState.move]}</span>
@@ -566,7 +570,7 @@ function updateMoveStatus() {
               ? "text-green-600 font-semibold"
               : "text-gray-500"
           }">
-            ${gameState.isCommitted ? "✅ Committed" : "⏳ Not committed"}
+            ${gameState.isCommitted ? "✅ Committed" : "⏳ Ready to use"}
           </p>
         </div>
       </div>
@@ -576,20 +580,12 @@ function updateMoveStatus() {
 
 // Update reveal status
 function updateRevealStatus() {
-  document.getElementById("revealStatus").innerHTML = `
-    <div class="bg-white rounded-xl p-3 border-2 border-gray-200 slide-up">
-      <p class="text-center font-semibold ${
-        gameState.isRevealed ? "text-green-600" : "text-gray-500"
-      }">
-        ${gameState.isRevealed ? "✅ Revealed" : "⏳ Not revealed"}
-      </p>
-    </div>
-  `;
+  addRevealButton();
 }
 
 // Polling interval for checking game result
 let gameResultPollInterval = null;
-let autoRevealInterval = null;
+let deadlinePollInterval = null;
 
 // Check game result
 async function checkGameResult() {
@@ -597,86 +593,21 @@ async function checkGameResult() {
 
   try {
     const game = await contract.getGame(gameState.gameId);
-
-    // Debug: Check actual status value
     const statusNum = Number(game.status);
-    const p1Revealed = game.player1Move !== 255;
-    const p2Revealed = game.player2Move !== 255;
-    const bothRevealed = p1Revealed && p2Revealed;
 
-    // Only show warning if status is Revealed (2) and both are revealed but status isn't Complete (3)
-    const showWarning = bothRevealed && statusNum === 2;
+    // Update game status display (includes deadline info)
+    await updateGameStatus();
+    updateRevealStatus();
 
-    // Update game status display with debug info
-    const statusText = ["Waiting", "Committed", "Revealed", "Completed"][
-      statusNum
-    ];
-    const statusClass = `status-${statusText.toLowerCase()}`;
-    document.getElementById("gameStatus").innerHTML = `
-      <div class="bg-white rounded-xl p-4 border-2 border-gray-200 slide-up">
-        <div class="flex flex-wrap items-center gap-3 mb-3">
-          <span class="status-badge ${statusClass}">${statusText}</span>
-          <span class="text-gray-600 font-semibold">Game ID: <span class="font-mono text-purple-600">${
-            gameState.gameId
-          }</span></span>
-        </div>
-        <p class="text-gray-700 font-medium mb-2">
-          👤 You are <span class="text-purple-600 font-bold">Player ${
-            gameState.playerNumber
-          }</span>
-        </p>
-        <div class="flex gap-4 text-sm">
-          <span class="px-2 py-1 rounded ${
-            p1Revealed
-              ? "bg-green-100 text-green-800"
-              : "bg-gray-100 text-gray-600"
-          }">
-            Player 1: ${p1Revealed ? "✅" : "❌"}
-          </span>
-          <span class="px-2 py-1 rounded ${
-            p2Revealed
-              ? "bg-green-100 text-green-800"
-              : "bg-gray-100 text-gray-600"
-          }">
-            Player 2: ${p2Revealed ? "✅" : "❌"}
-          </span>
-        </div>
-        ${
-          showWarning
-            ? '<p class="mt-2 text-orange-600 font-semibold">⚠️ Both revealed but status not Complete!</p>'
-            : ""
-        }
-      </div>
-    `;
-
-    // If both players revealed but status isn't 3, treat it as completed
-    // BUT only if the game is actually in Revealed status (2) - not Waiting or Committed
-    if (bothRevealed && statusNum === 2) {
-      log(
-        `⚠️ Both players revealed but contract status is ${statusNum} (expected 3). Checking winner...`
-      );
-      // Try to determine winner locally as fallback
-      const winner = determineWinnerLocal(game.player1Move, game.player2Move);
-      log(
-        `🎉 Game completed! Winner: ${
-          winner === 0 ? "Tie" : `Player ${winner}`
-        }`
-      );
-      showGameResult(
-        winner === 0
-          ? "🤝 It's a TIE!"
-          : winner === gameState.playerNumber
-          ? "🎉 YOU WIN! 🎉"
-          : "😔 You lost. Better luck next time!",
-        winner,
-        game
-      );
-      // Stop polling
-      if (gameResultPollInterval) {
-        clearInterval(gameResultPollInterval);
-        gameResultPollInterval = null;
+    // If Player 2 just joined and Player 1 is watching, start deadline polling
+    if (
+      statusNum === 2 &&
+      game.player2 !== ethers.ZeroAddress &&
+      gameState.playerNumber === 1
+    ) {
+      if (!deadlinePollInterval) {
+        startDeadlinePolling();
       }
-      return;
     }
 
     if (statusNum === 3) {
@@ -684,6 +615,10 @@ async function checkGameResult() {
       if (gameResultPollInterval) {
         clearInterval(gameResultPollInterval);
         gameResultPollInterval = null;
+      }
+      if (deadlinePollInterval) {
+        clearInterval(deadlinePollInterval);
+        deadlinePollInterval = null;
       }
 
       // Show result
@@ -711,16 +646,16 @@ async function checkGameResult() {
       log(`Player 1 played: ${getMoveName(game.player1Move)}`);
       log(`Player 2 played: ${getMoveName(game.player2Move)}`);
     } else if (statusNum === 2) {
-      // Status is "Revealed" but should be "Completed" if both revealed
-      if (bothRevealed) {
-        log("⏳ Both players revealed, waiting for contract to resolve...");
+      // Status is "Revealed" - Player 2 joined, waiting for Player 1 to reveal
+      if (gameState.playerNumber === 1) {
+        log("⏳ Player 2 has joined. Reveal your move before the deadline!");
       } else {
-        log("⏳ Waiting for opponent to reveal...");
+        log("⏳ Waiting for Player 1 to reveal...");
       }
-    } else {
-      // Still waiting for other player to reveal
-      if (gameState.isRevealed) {
-        log("⏳ Waiting for opponent to reveal...");
+    } else if (statusNum === 1) {
+      // Status is "Committed" - Player 1 created game, waiting for Player 2
+      if (gameState.playerNumber === 1) {
+        log("⏳ Waiting for Player 2 to join...");
       }
     }
   } catch (error) {
@@ -744,41 +679,387 @@ function startGameResultPolling() {
   }, 2000);
 }
 
-// Auto-reveal when both commitments exist and we haven't revealed yet
-async function maybeAutoReveal() {
-  if (
-    !contract ||
-    !gameState.gameId ||
-    !gameState.isCommitted ||
-    gameState.isRevealed
-  )
+// Resolve game - Player 1 reveals their move with ZK proof
+// Player 2's move is already stored on-chain from joinGame()
+async function resolveGame() {
+  if (!contract || !noir || !backend) {
+    log("❌ Noir or contract not initialized");
     return;
+  }
+
+  if (gameState.playerNumber !== 1) {
+    log("❌ Only Player 1 can reveal their move");
+    log("💡 Player 2's move was already submitted when they joined");
+    return;
+  }
+
+  if (!gameState.isCommitted) {
+    log("❌ Move not committed yet");
+    return;
+  }
+
+  if (gameState.isRevealed) {
+    log("❌ Game already resolved");
+    return;
+  }
+
   try {
+    log("Getting game state from contract...");
     const game = await contract.getGame(gameState.gameId);
-    const bothCommitted =
-      game.player1Commitment !== ethers.ZeroHash &&
-      game.player2Commitment !== ethers.ZeroHash;
-    if (bothCommitted) {
-      // Trigger reveal once
-      if (autoRevealInterval) {
-        clearInterval(autoRevealInterval);
-        autoRevealInterval = null;
-      }
-      await revealMove();
+
+    // Check that Player 2 has joined
+    if (game.player2 === ethers.ZeroAddress || game.player2Move === 255) {
+      log("⏳ Waiting for Player 2 to join...");
+      return;
     }
-  } catch (_) {}
+
+    // Check deadline
+    const deadline = Number(game.revealDeadline);
+    const now = Math.floor(Date.now() / 1000);
+    if (now > deadline) {
+      log("❌ Deadline has passed. Game will be forfeited.");
+      return;
+    }
+
+    const timeRemaining = deadline - now;
+    if (timeRemaining < 60) {
+      log(`⚠️ Warning: Only ${timeRemaining} seconds remaining to reveal!`);
+    }
+
+    // Get Player 2's move from contract (already stored)
+    const move1 = Number(gameState.move);
+    const move2 = Number(game.player2Move);
+
+    // Validate moves
+    if (move1 < 0 || move1 > 2 || move2 < 0 || move2 > 2) {
+      log(`❌ Invalid moves: move1=${move1}, move2=${move2}`);
+      throw new Error(`Invalid moves: move1=${move1}, move2=${move2}`);
+    }
+
+    log(
+      `✅ Player 1's move: ${
+        move1 === 0 ? "Rock" : move1 === 1 ? "Paper" : "Scissors"
+      }`
+    );
+    log(
+      `✅ Player 2's move: ${
+        move2 === 0 ? "Rock" : move2 === 1 ? "Paper" : "Scissors"
+      }`
+    );
+    log("Generating ZK proof... ⏳");
+
+    const winner = determineWinnerLocal(move1, move2);
+    log(`Expected winner: ${winner === 0 ? "Tie" : `Player ${winner}`}`);
+
+    // Validate winner
+    if (winner < 0 || winner > 2) {
+      log(`❌ Invalid winner calculation: ${winner}`);
+      throw new Error(`Invalid winner: ${winner}`);
+    }
+
+    // Double-check: verify the winner calculation is correct
+    // This should match the circuit's determine_winner function exactly
+    let expectedWinner;
+    if (move1 === move2) {
+      expectedWinner = 0; // Tie
+    } else if (move1 === 0 && move2 === 2) {
+      expectedWinner = 1; // Rock beats Scissors
+    } else if (move1 === 1 && move2 === 0) {
+      expectedWinner = 1; // Paper beats Rock
+    } else if (move1 === 2 && move2 === 1) {
+      expectedWinner = 1; // Scissors beats Paper
+    } else {
+      expectedWinner = 2; // Player 2 wins
+    }
+
+    if (winner !== expectedWinner) {
+      log(
+        `❌ Winner mismatch! Computed: ${winner}, Expected: ${expectedWinner}`
+      );
+      throw new Error(
+        `Winner calculation error: ${winner} !== ${expectedWinner}`
+      );
+    }
+
+    // Generate proof - Noir expects Field values
+    // Based on Noir.js API, inputs should be plain numbers or BigInt
+    const inputs = {
+      player1_move: move1,
+      player2_move: move2,
+      winner: winner,
+    };
+
+    // Log inputs (convert BigInt to string for logging)
+    log(
+      `Calling noir.execute with inputs: player1_move=${move1}, player2_move=${move2}, winner=${winner}`
+    );
+
+    let witness;
+    try {
+      const result = await noir.execute(inputs);
+      witness = result.witness;
+      log("✅ Witness computed successfully");
+    } catch (witnessError) {
+      log(`❌ Witness computation failed: ${witnessError.message}`);
+      throw new Error(`Witness computation failed: ${witnessError.message}`);
+    }
+
+    let proof;
+    try {
+      // Use keccak hash function to match the verifier (generated with --oracle_hash keccak)
+      proof = await backend.generateProof(witness, { keccak: true });
+      log("✅ Proof generated successfully with Keccak256 hash");
+    } catch (proofError) {
+      log(`❌ Proof generation failed: ${proofError.message}`);
+      throw new Error(`Proof generation failed: ${proofError.message}`);
+    }
+
+    // Verify proof locally (also use keccak to match)
+    const isValid = await backend.verifyProof(proof, { keccak: true });
+    if (!isValid) {
+      throw new Error("Proof verification failed locally");
+    }
+
+    log("✅ Proof generated and verified!");
+
+    // Debug: Log proof structure
+    console.log("Proof object:", proof);
+    console.log("Proof keys:", Object.keys(proof || {}));
+    if (proof.proof) {
+      console.log("proof.proof type:", typeof proof.proof);
+      console.log(
+        "proof.proof is Uint8Array:",
+        proof.proof instanceof Uint8Array
+      );
+      console.log("proof.proof length:", proof.proof?.length);
+    }
+
+    // Serialize proof - bb.js proofs need to be serialized for the verifier
+    // Check if proof has a serialize method or specific format
+    let proofBytes;
+    try {
+      // bb.js UltraHonkBackend returns proof with .proof property containing raw bytes
+      if (proof.proof && proof.proof instanceof Uint8Array) {
+        proofBytes = ethers.hexlify(proof.proof);
+        log("✅ Proof serialized from proof.proof (Uint8Array)");
+      } else if (backend.serializeProof) {
+        proofBytes = await backend.serializeProof(proof);
+        log("✅ Proof serialized using backend.serializeProof()");
+      } else if (proof.serialize) {
+        proofBytes = await proof.serialize();
+        log("✅ Proof serialized using proof.serialize()");
+      } else {
+        // Fall back to our serialization
+        proofBytes = await serializeProof(proof);
+        log("✅ Proof serialized using custom method");
+      }
+
+      // Log proof length for debugging
+      const proofLength =
+        typeof proofBytes === "string"
+          ? (proofBytes.length - 2) / 2 // hex string: subtract '0x' and divide by 2
+          : proofBytes.length;
+      log(`📏 Proof length: ${proofLength} bytes`);
+    } catch (serializeError) {
+      log(`❌ Proof serialization failed: ${serializeError.message}`);
+      console.error("Proof object:", proof);
+      console.error("Backend methods:", Object.keys(backend || {}));
+      throw serializeError;
+    }
+
+    // Resolve game on contract with Player 1's move, salt, and proof
+    log("Resolving game on contract...");
+
+    try {
+      // Estimate gas first to catch errors early
+      const gasEstimate = await contract.resolveGame.estimateGas(
+        gameState.gameId,
+        move1,
+        gameState.salt,
+        proofBytes
+      );
+      log(`⛽ Gas estimate: ${gasEstimate.toString()}`);
+
+      const tx = await contract.resolveGame(
+        gameState.gameId,
+        move1,
+        gameState.salt,
+        proofBytes,
+        { gasLimit: gasEstimate * BigInt(2) } // Add buffer
+      );
+      const receipt = await tx.wait();
+
+      log(`✅ Game resolved! Transaction: ${receipt.hash}`);
+      log(`🎉 Winner: ${winner === 0 ? "Tie" : `Player ${winner}`}`);
+
+      gameState.isRevealed = true;
+
+      // Start polling for final result
+      setTimeout(() => {
+        startGameResultPolling();
+      }, 1000);
+    } catch (txError) {
+      // Enhanced error logging
+      log(`❌ Transaction failed: ${txError.message}`);
+      if (txError.data) {
+        log(`📋 Error data: ${txError.data}`);
+        console.error("Full error data:", txError.data);
+      }
+      if (txError.reason) {
+        log(`📋 Error reason: ${txError.reason}`);
+      }
+      console.error("Full transaction error:", txError);
+
+      // Check if it's a verifier error
+      if (txError.data && txError.data.length > 4) {
+        const errorSelector = txError.data.slice(0, 10);
+        log(`🔍 Error selector: ${errorSelector}`);
+        log(
+          `💡 This might be a proof format mismatch with the Verifier contract`
+        );
+        log(`💡 The Verifier was generated from a specific circuit version`);
+        log(
+          `💡 If the circuit was recompiled, the proof format might not match`
+        );
+      }
+
+      throw txError;
+    }
+  } catch (error) {
+    log(`❌ Error resolving game: ${error.message}`);
+    console.error(error);
+    throw error;
+  }
 }
 
-function startAutoRevealWatcher() {
-  // Clear existing interval
-  if (autoRevealInterval) {
-    clearInterval(autoRevealInterval);
+// Add reveal button handler for Player 1
+function addRevealButton() {
+  const revealStatusDiv = document.getElementById("revealStatus");
+  if (!revealStatusDiv) return;
+
+  if (
+    gameState.playerNumber === 1 &&
+    gameState.isCommitted &&
+    !gameState.isRevealed
+  ) {
+    revealStatusDiv.innerHTML = `
+      <button
+        id="revealBtn"
+        class="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-700 hover:to-emerald-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl"
+      >
+        🔓 Reveal Move
+      </button>
+    `;
+    document.getElementById("revealBtn").addEventListener("click", resolveGame);
+  } else {
+    revealStatusDiv.innerHTML = "";
   }
-  // Check immediately and then poll
-  maybeAutoReveal();
-  autoRevealInterval = setInterval(() => {
-    maybeAutoReveal();
+}
+
+// Check deadline and auto-forfeit if passed
+async function checkDeadline() {
+  if (!contract || !gameState.gameId) return;
+
+  try {
+    const game = await contract.getGame(gameState.gameId);
+    const isCompleted = game.status === 3; // GameStatus.Completed
+
+    if (isCompleted) {
+      // Game already resolved, stop polling
+      if (deadlinePollInterval) {
+        clearInterval(deadlinePollInterval);
+        deadlinePollInterval = null;
+      }
+      return;
+    }
+
+    // Only check deadline if Player 2 has joined
+    if (game.player2 === ethers.ZeroAddress || game.revealDeadline === 0) {
+      return;
+    }
+
+    const deadline = Number(game.revealDeadline);
+    const now = Math.floor(Date.now() / 1000);
+    const timeRemaining = deadline - now;
+
+    // Update deadline display
+    updateDeadlineDisplay(timeRemaining);
+
+    // If deadline passed and game not resolved, forfeit
+    if (timeRemaining <= 0 && game.status !== 3) {
+      log("⏰ Deadline passed! Forfeiting game...");
+      await forfeitGame();
+    }
+  } catch (error) {
+    console.error("Deadline check error:", error);
+  }
+}
+
+// Forfeit game (anyone can call after deadline)
+async function forfeitGame() {
+  if (!contract || !gameState.gameId) return;
+
+  try {
+    log("Calling forfeitGame()...");
+    const tx = await contract.forfeitGame(gameState.gameId);
+    await tx.wait();
+    log("✅ Game forfeited! Player 2 wins by default.");
+
+    // Stop polling
+    if (deadlinePollInterval) {
+      clearInterval(deadlinePollInterval);
+      deadlinePollInterval = null;
+    }
+
+    // Refresh game status
+    await checkGameResult();
+  } catch (error) {
+    log(`❌ Error forfeiting game: ${error.message}`);
+  }
+}
+
+// Start deadline polling
+function startDeadlinePolling() {
+  if (deadlinePollInterval) {
+    clearInterval(deadlinePollInterval);
+  }
+  checkDeadline();
+  deadlinePollInterval = setInterval(() => {
+    checkDeadline();
   }, 2000);
+}
+
+// Update deadline display in UI
+function updateDeadlineDisplay(timeRemaining) {
+  const deadlineDiv = document.getElementById("deadlineDisplay");
+  if (!deadlineDiv) return;
+
+  if (timeRemaining <= 0) {
+    deadlineDiv.innerHTML = `
+      <div class="bg-red-100 border-2 border-red-300 rounded-xl p-4 text-center">
+        <p class="text-red-800 font-bold text-lg">⏰ Deadline Passed!</p>
+        <p class="text-red-600 text-sm">Player 1 forfeits - Player 2 wins</p>
+      </div>
+    `;
+  } else {
+    const minutes = Math.floor(timeRemaining / 60);
+    const seconds = timeRemaining % 60;
+    const timeStr = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+    const isUrgent = timeRemaining < 60;
+
+    deadlineDiv.innerHTML = `
+      <div class="bg-${isUrgent ? "red" : "yellow"}-100 border-2 border-${
+      isUrgent ? "red" : "yellow"
+    }-300 rounded-xl p-4 text-center">
+        <p class="text-${
+          isUrgent ? "red" : "yellow"
+        }-800 font-bold text-lg">⏰ Time Remaining: ${timeStr}</p>
+        <p class="text-${
+          isUrgent ? "red" : "yellow"
+        }-600 text-sm">Player 1 must reveal before deadline</p>
+      </div>
+    `;
+  }
 }
 
 // Helper function to get move name
@@ -865,14 +1146,18 @@ document.getElementById("createGameBtn").addEventListener("click", createGame);
 document.getElementById("joinGameBtn").addEventListener("click", joinGame);
 document
   .getElementById("rockBtn")
-  .addEventListener("click", () => commitMove(0));
+  .addEventListener("click", () => selectMove(0));
 document
   .getElementById("paperBtn")
-  .addEventListener("click", () => commitMove(1));
+  .addEventListener("click", () => selectMove(1));
 document
   .getElementById("scissorsBtn")
-  .addEventListener("click", () => commitMove(2));
-document.getElementById("revealBtn").addEventListener("click", revealMove);
+  .addEventListener("click", () => selectMove(2));
+
+// Update join button state when game ID is entered
+document.getElementById("gameIdInput").addEventListener("input", () => {
+  updateButtonStates();
+});
 
 // Initialize on load
 async function init() {
@@ -880,12 +1165,18 @@ async function init() {
     await loadContractArtifact();
     await initNoir();
 
-    // Load Sepolia contract address from addresses.json
+    // Load contract address from addresses.json (prefer localhost for local testing)
     try {
       const addressesResponse = await fetch("/addresses.json");
       if (addressesResponse.ok) {
         const addresses = await addressesResponse.json();
-        if (addresses.sepolia?.rockPaperScissors) {
+        // Check localhost first (for local testing), then sepolia
+        if (addresses.localhost?.rockPaperScissors) {
+          CONTRACT_ADDRESS = addresses.localhost.rockPaperScissors;
+          document.getElementById("contractAddressInput").value =
+            CONTRACT_ADDRESS;
+          log(`✅ Loaded localhost contract address: ${CONTRACT_ADDRESS}`);
+        } else if (addresses.sepolia?.rockPaperScissors) {
           CONTRACT_ADDRESS = addresses.sepolia.rockPaperScissors;
           document.getElementById("contractAddressInput").value =
             CONTRACT_ADDRESS;
@@ -897,7 +1188,14 @@ async function init() {
     }
 
     log("🚀 Application ready!");
-    log("💡 Connect your wallet and switch to Sepolia testnet");
+    if (CONTRACT_ADDRESS) {
+      log("💡 Connect your wallet and switch to the correct network");
+    } else {
+      log("💡 Enter contract address above or update addresses.json");
+    }
+
+    // Initialize button states
+    updateButtonStates();
   } catch (error) {
     log(`Failed to initialize: ${error.message}`);
   }

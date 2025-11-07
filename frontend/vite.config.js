@@ -20,7 +20,15 @@ export default defineConfig({
     esbuildOptions: {
       target: 'esnext',
     },
-    exclude: ['@noir-lang/noirc_abi', '@noir-lang/acvm_js'],
+    exclude: [
+      '@noir-lang/noirc_abi',
+      '@noir-lang/acvm_js',
+      '@aztec/bb.js',
+      '@noir-lang/noir_js',
+    ],
+  },
+  worker: {
+    format: 'es',
   },
 });
 

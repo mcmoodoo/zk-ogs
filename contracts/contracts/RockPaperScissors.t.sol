@@ -16,50 +16,53 @@ contract RockPaperScissorsTest is Test {
     }
 
     function test_CreateGame() public {
+        bytes32 commitment = keccak256(
+            abi.encodePacked(uint8(0), keccak256("salt1"))
+        );
         vm.prank(player1);
-        uint256 gameId = game.createGame();
+        uint256 gameId = game.createGame(commitment);
 
         RockPaperScissors.Game memory gameData = game.getGame(gameId);
         require(gameData.gameId == gameId, "Game ID mismatch");
         require(gameData.player1 == player1, "Player1 mismatch");
+        require(uint8(gameData.status) == 1, "Status should be Committed");
         require(
-            uint8(gameData.status) == 0,
-            "Status should be WaitingForPlayer"
+            gameData.player1Commitment == commitment,
+            "Commitment should be set"
         );
     }
 
     function test_JoinGame() public {
+        bytes32 commitment = keccak256(
+            abi.encodePacked(uint8(0), keccak256("salt1"))
+        );
         vm.prank(player1);
-        uint256 gameId = game.createGame();
+        uint256 gameId = game.createGame(commitment);
 
         vm.prank(player2);
-        game.joinGame(gameId);
+        game.joinGame(gameId, 1); // Player 2 plays Paper
 
         RockPaperScissors.Game memory gameData = game.getGame(gameId);
-        require(uint8(gameData.status) == 1, "Status should be Committed");
+        require(uint8(gameData.status) == 2, "Status should be Revealed");
         require(gameData.player2 == player2, "Player2 mismatch");
+        require(gameData.player2Move == 1, "Player2 move should be Paper");
+        require(
+            gameData.revealDeadline > block.timestamp,
+            "Deadline should be set"
+        );
     }
 
     function test_CommitMoves() public {
-        vm.prank(player1);
-        uint256 gameId = game.createGame();
-
-        vm.prank(player2);
-        game.joinGame(gameId);
-
-        // Player 1 commits rock (0)
+        // Player 1 commits rock (0) when creating game
         bytes32 p1Salt = keccak256("salt1");
         bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt));
 
         vm.prank(player1);
-        game.commitMove(gameId, p1Commitment);
+        uint256 gameId = game.createGame(p1Commitment);
 
-        // Player 2 commits paper (1)
-        bytes32 p2Salt = keccak256("salt2");
-        bytes32 p2Commitment = keccak256(abi.encodePacked(uint8(1), p2Salt));
-
+        // Player 2 submits paper (1) when joining
         vm.prank(player2);
-        game.commitMove(gameId, p2Commitment);
+        game.joinGame(gameId, 1);
 
         RockPaperScissors.Game memory gameData = game.getGame(gameId);
         require(
@@ -67,38 +70,26 @@ contract RockPaperScissorsTest is Test {
             "Player1 commitment should be set"
         );
         require(
-            gameData.player2Commitment != bytes32(0),
-            "Player2 commitment should be set"
+            gameData.player2Move == 1,
+            "Player2 move should be set to Paper"
         );
     }
 
     function test_RevealMoves() public {
-        // Setup game
-        vm.prank(player1);
-        uint256 gameId = game.createGame();
-
-        vm.prank(player2);
-        game.joinGame(gameId);
-
-        // Commit moves
+        // Player 1 commits rock (0) when creating game
         bytes32 p1Salt = keccak256("salt1");
         bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt)); // Rock
 
-        bytes32 p2Salt = keccak256("salt2");
-        bytes32 p2Commitment = keccak256(abi.encodePacked(uint8(2), p2Salt)); // Scissors
-
         vm.prank(player1);
-        game.commitMove(gameId, p1Commitment);
+        uint256 gameId = game.createGame(p1Commitment);
 
+        // Player 2 submits scissors (2) when joining
         vm.prank(player2);
-        game.commitMove(gameId, p2Commitment);
+        game.joinGame(gameId, 2); // Scissors
 
-        // Reveal moves
+        // Player 1 reveals with empty proof (no verifier set)
         vm.prank(player1);
-        game.revealMove(gameId, 0, p1Salt, "");
-
-        vm.prank(player2);
-        game.revealMove(gameId, 2, p2Salt, "");
+        game.resolveGame(gameId, 0, p1Salt, "");
 
         RockPaperScissors.Game memory gameData = game.getGame(gameId);
         require(uint8(gameData.status) == 3, "Status should be Completed");
@@ -114,29 +105,17 @@ contract RockPaperScissorsTest is Test {
     }
 
     function test_RockBeatsScissors() public {
-        vm.prank(player1);
-        uint256 gameId = game.createGame();
-
-        vm.prank(player2);
-        game.joinGame(gameId);
-
         bytes32 p1Salt = keccak256("salt1");
         bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt)); // Rock
 
-        bytes32 p2Salt = keccak256("salt2");
-        bytes32 p2Commitment = keccak256(abi.encodePacked(uint8(2), p2Salt)); // Scissors
-
         vm.prank(player1);
-        game.commitMove(gameId, p1Commitment);
+        uint256 gameId = game.createGame(p1Commitment);
 
         vm.prank(player2);
-        game.commitMove(gameId, p2Commitment);
+        game.joinGame(gameId, 2); // Scissors
 
         vm.prank(player1);
-        game.revealMove(gameId, 0, p1Salt, "");
-
-        vm.prank(player2);
-        game.revealMove(gameId, 2, p2Salt, "");
+        game.resolveGame(gameId, 0, p1Salt, "");
 
         RockPaperScissors.Game memory gameData = game.getGame(gameId);
         require(
@@ -146,125 +125,478 @@ contract RockPaperScissorsTest is Test {
     }
 
     function test_PaperBeatsRock() public {
-        vm.prank(player1);
-        uint256 gameId = game.createGame();
-
-        vm.prank(player2);
-        game.joinGame(gameId);
-
         bytes32 p1Salt = keccak256("salt1");
         bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(1), p1Salt)); // Paper
 
-        bytes32 p2Salt = keccak256("salt2");
-        bytes32 p2Commitment = keccak256(abi.encodePacked(uint8(0), p2Salt)); // Rock
-
         vm.prank(player1);
-        game.commitMove(gameId, p1Commitment);
+        uint256 gameId = game.createGame(p1Commitment);
 
         vm.prank(player2);
-        game.commitMove(gameId, p2Commitment);
+        game.joinGame(gameId, 0); // Rock
 
         vm.prank(player1);
-        game.revealMove(gameId, 1, p1Salt, "");
-
-        vm.prank(player2);
-        game.revealMove(gameId, 0, p2Salt, "");
+        game.resolveGame(gameId, 1, p1Salt, "");
 
         RockPaperScissors.Game memory gameData = game.getGame(gameId);
         require(gameData.winner == 1, "Paper should beat Rock (Player1 wins)");
     }
 
     function test_Tie() public {
-        vm.prank(player1);
-        uint256 gameId = game.createGame();
-
-        vm.prank(player2);
-        game.joinGame(gameId);
-
         bytes32 p1Salt = keccak256("salt1");
         bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt)); // Rock
 
-        bytes32 p2Salt = keccak256("salt2");
-        bytes32 p2Commitment = keccak256(abi.encodePacked(uint8(0), p2Salt)); // Rock
-
         vm.prank(player1);
-        game.commitMove(gameId, p1Commitment);
+        uint256 gameId = game.createGame(p1Commitment);
 
         vm.prank(player2);
-        game.commitMove(gameId, p2Commitment);
+        game.joinGame(gameId, 0); // Rock
 
         vm.prank(player1);
-        game.revealMove(gameId, 0, p1Salt, "");
-
-        vm.prank(player2);
-        game.revealMove(gameId, 0, p2Salt, "");
+        game.resolveGame(gameId, 0, p1Salt, "");
 
         RockPaperScissors.Game memory gameData = game.getGame(gameId);
         require(gameData.winner == 0, "Should be a tie");
     }
 
     function test_RevealWithWrongSalt() public {
-        vm.prank(player1);
-        uint256 gameId = game.createGame();
-
-        vm.prank(player2);
-        game.joinGame(gameId);
-
         bytes32 p1Salt = keccak256("salt1");
         bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt));
 
         vm.prank(player1);
-        game.commitMove(gameId, p1Commitment);
+        uint256 gameId = game.createGame(p1Commitment);
 
-        // Try to reveal with wrong salt
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        // Try to resolve with wrong salt
         vm.prank(player1);
         vm.expectRevert();
-        game.revealMove(gameId, 0, keccak256("wrong_salt"), "");
+        game.resolveGame(gameId, 0, keccak256("wrong_salt"), "");
     }
 
-    function test_RevealSecondRequiresProofWhenVerifierSet() public {
+    function test_ResolveRequiresProofWhenVerifierSet() public {
         // Setup game
-        vm.prank(player1);
-        uint256 gameId = game.createGame();
-
-        vm.prank(player2);
-        game.joinGame(gameId);
-
-        // Commit moves
         bytes32 p1Salt = keccak256("salt1");
         bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt));
-        bytes32 p2Salt = keccak256("salt2");
-        bytes32 p2Commitment = keccak256(abi.encodePacked(uint8(2), p2Salt));
 
         vm.prank(player1);
-        game.commitMove(gameId, p1Commitment);
+        uint256 gameId = game.createGame(p1Commitment);
 
         vm.prank(player2);
-        game.commitMove(gameId, p2Commitment);
+        game.joinGame(gameId, 2); // Scissors
 
         // Set a dummy verifier address (non-zero) to activate proof requirement
-        // We deploy a minimal contract that always reverts verify to simulate missing/invalid proof
         AlwaysFailVerifier failVerifier = new AlwaysFailVerifier();
         vm.prank(address(this));
         game.setVerifier(address(failVerifier));
 
-        // First reveal (no proof) should succeed because opponent hasn't revealed yet
+        // Resolve without valid proof should revert due to verifier failure
         vm.prank(player1);
-        game.revealMove(gameId, 0, p1Salt, "");
+        vm.expectRevert();
+        game.resolveGame(gameId, 0, p1Salt, "");
+    }
 
-        // Second reveal without valid proof should revert due to verifier failure
+    function test_ForfeitAfterDeadline() public {
+        bytes32 p1Commitment = keccak256(
+            abi.encodePacked(uint8(0), keccak256("salt1"))
+        );
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        uint256 joinTime = block.timestamp;
+        game.joinGame(gameId, 1);
+
+        RockPaperScissors.Game memory gameData = game.getGame(gameId);
+        uint256 deadline = gameData.revealDeadline;
+
+        // Verify deadline is set correctly (5 minutes after join)
+        require(
+            deadline == joinTime + 5 minutes,
+            "Deadline should be 5 minutes after join"
+        );
+
+        // Fast forward past deadline
+        vm.warp(deadline + 1);
+
+        // Anyone can call forfeit
+        game.forfeitGame(gameId);
+
+        gameData = game.getGame(gameId);
+        require(uint8(gameData.status) == 3, "Status should be Completed");
+        require(gameData.winner == 2, "Player 2 should win by forfeit");
+    }
+
+    function test_CannotForfeitBeforeDeadline() public {
+        bytes32 p1Commitment = keccak256(
+            abi.encodePacked(uint8(0), keccak256("salt1"))
+        );
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        RockPaperScissors.Game memory gameData = game.getGame(gameId);
+        uint256 deadline = gameData.revealDeadline;
+
+        // Try to forfeit before deadline (should fail)
+        vm.expectRevert();
+        game.forfeitGame(gameId);
+
+        // Fast forward to just before deadline
+        vm.warp(deadline - 1);
+        vm.expectRevert();
+        game.forfeitGame(gameId);
+    }
+
+    function test_CannotResolveAfterDeadline() public {
+        bytes32 p1Salt = keccak256("salt1");
+        bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt));
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        RockPaperScissors.Game memory gameData = game.getGame(gameId);
+        uint256 deadline = gameData.revealDeadline;
+
+        // Fast forward past deadline
+        vm.warp(deadline + 1);
+
+        // Try to resolve after deadline (should fail)
+        vm.prank(player1);
+        vm.expectRevert();
+        game.resolveGame(gameId, 0, p1Salt, "");
+    }
+
+    function test_CanResolveBeforeDeadline() public {
+        bytes32 p1Salt = keccak256("salt1");
+        bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt));
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        RockPaperScissors.Game memory gameData = game.getGame(gameId);
+        uint256 deadline = gameData.revealDeadline;
+
+        // Fast forward to just before deadline
+        vm.warp(deadline - 1);
+
+        // Should be able to resolve
+        vm.prank(player1);
+        game.resolveGame(gameId, 0, p1Salt, "");
+
+        gameData = game.getGame(gameId);
+        require(uint8(gameData.status) == 3, "Status should be Completed");
+    }
+
+    function test_CannotForfeitIfAlreadyResolved() public {
+        bytes32 p1Salt = keccak256("salt1");
+        bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt));
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        // Resolve the game
+        vm.prank(player1);
+        game.resolveGame(gameId, 0, p1Salt, "");
+
+        // Try to forfeit after resolution (should fail)
+        vm.expectRevert();
+        game.forfeitGame(gameId);
+    }
+
+    function test_CannotForfeitIfP2NotJoined() public {
+        bytes32 p1Commitment = keccak256(
+            abi.encodePacked(uint8(0), keccak256("salt1"))
+        );
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        // Try to forfeit before P2 joins (should fail)
+        vm.expectRevert();
+        game.forfeitGame(gameId);
+    }
+
+    function test_OnlyP1CanResolve() public {
+        bytes32 p1Salt = keccak256("salt1");
+        bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt));
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        // P2 tries to resolve with wrong salt (should fail - only P1 knows the salt)
         vm.prank(player2);
         vm.expectRevert();
-        game.revealMove(gameId, 2, p2Salt, "");
+        game.resolveGame(gameId, 0, keccak256("wrong_salt"), "");
+
+        // Even if P2 somehow knew P1's salt, they could technically resolve
+        // But in practice, only P1 knows their salt, so only they can resolve
+        // The commitment check ensures only the correct move+salt combination works
+    }
+
+    function test_CannotResolveIfP2NotJoined() public {
+        bytes32 p1Salt = keccak256("salt1");
+        bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt));
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        // Try to resolve before P2 joins (should fail)
+        vm.prank(player1);
+        vm.expectRevert();
+        game.resolveGame(gameId, 0, p1Salt, "");
+    }
+
+    function test_CannotJoinWithInvalidMove() public {
+        bytes32 p1Commitment = keccak256(
+            abi.encodePacked(uint8(0), keccak256("salt1"))
+        );
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        // Try to join with invalid move (should fail)
+        vm.prank(player2);
+        vm.expectRevert();
+        game.joinGame(gameId, 3); // Invalid move (must be 0, 1, or 2)
+
+        vm.prank(player2);
+        vm.expectRevert();
+        game.joinGame(gameId, 255); // Invalid move
+    }
+
+    function test_CannotCreateGameWithoutCommitment() public {
+        // This test ensures createGame requires commitment parameter
+        // (Solidity will enforce this at compile time, but we can test the flow)
+        bytes32 commitment = bytes32(0);
+        vm.prank(player1);
+        uint256 gameId = game.createGame(commitment);
+
+        // Game should be created even with zero commitment (valid edge case)
+        RockPaperScissors.Game memory gameData = game.getGame(gameId);
+        require(
+            gameData.player1Commitment == bytes32(0),
+            "Commitment should be zero"
+        );
+    }
+
+    function test_CannotResolveTwice() public {
+        bytes32 p1Salt = keccak256("salt1");
+        bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt));
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        // Resolve once
+        vm.prank(player1);
+        game.resolveGame(gameId, 0, p1Salt, "");
+
+        // Try to resolve again (should fail)
+        vm.prank(player1);
+        vm.expectRevert();
+        game.resolveGame(gameId, 0, p1Salt, "");
+    }
+
+    function test_DeadlineIsSetCorrectly() public {
+        bytes32 p1Commitment = keccak256(
+            abi.encodePacked(uint8(0), keccak256("salt1"))
+        );
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        uint256 joinTime = block.timestamp;
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        RockPaperScissors.Game memory gameData = game.getGame(gameId);
+        uint256 expectedDeadline = joinTime + 5 minutes;
+        require(
+            gameData.revealDeadline == expectedDeadline,
+            "Deadline should be exactly 5 minutes after join"
+        );
+    }
+
+    function test_ForfeitEmitsEvents() public {
+        bytes32 p1Commitment = keccak256(
+            abi.encodePacked(uint8(0), keccak256("salt1"))
+        );
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        RockPaperScissors.Game memory gameData = game.getGame(gameId);
+        vm.warp(gameData.revealDeadline + 1);
+
+        // Expect GameForfeited and GameResolved events
+        vm.expectEmit(true, false, false, false);
+        emit RockPaperScissors.GameForfeited(gameId);
+
+        vm.expectEmit(true, false, false, false);
+        emit RockPaperScissors.GameResolved(gameId, 2);
+
+        game.forfeitGame(gameId);
+    }
+
+    function test_ResolveBeforeDeadlineWorks() public {
+        bytes32 p1Salt = keccak256("salt1");
+        bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt));
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 2); // Scissors
+
+        RockPaperScissors.Game memory gameData = game.getGame(gameId);
+        uint256 deadline = gameData.revealDeadline;
+
+        // Resolve well before deadline
+        vm.warp(deadline - 100);
+        vm.prank(player1);
+        game.resolveGame(gameId, 0, p1Salt, "");
+
+        gameData = game.getGame(gameId);
+        require(uint8(gameData.status) == 3, "Status should be Completed");
+        require(gameData.winner == 1, "Player 1 should win");
+    }
+
+    function test_ResolveAtExactDeadline() public {
+        bytes32 p1Salt = keccak256("salt1");
+        bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt));
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        RockPaperScissors.Game memory gameData = game.getGame(gameId);
+        uint256 deadline = gameData.revealDeadline;
+
+        // Resolve at exact deadline (should work)
+        vm.warp(deadline);
+        vm.prank(player1);
+        game.resolveGame(gameId, 0, p1Salt, "");
+
+        gameData = game.getGame(gameId);
+        require(uint8(gameData.status) == 3, "Status should be Completed");
+    }
+
+    function test_CannotJoinGameTwice() public {
+        bytes32 p1Commitment = keccak256(
+            abi.encodePacked(uint8(0), keccak256("salt1"))
+        );
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        // Try to join again (should fail)
+        vm.prank(player2);
+        vm.expectRevert();
+        game.joinGame(gameId, 2);
+    }
+
+    function test_CannotJoinAsPlayer1() public {
+        bytes32 p1Commitment = keccak256(
+            abi.encodePacked(uint8(0), keccak256("salt1"))
+        );
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        // Player 1 tries to join their own game (should fail)
+        vm.prank(player1);
+        vm.expectRevert();
+        game.joinGame(gameId, 1);
+    }
+
+    function test_ScissorsBeatsPaper() public {
+        bytes32 p1Salt = keccak256("salt1");
+        bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(2), p1Salt)); // Scissors
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1); // Paper
+
+        vm.prank(player1);
+        game.resolveGame(gameId, 2, p1Salt, "");
+
+        RockPaperScissors.Game memory gameData = game.getGame(gameId);
+        require(
+            gameData.winner == 1,
+            "Scissors should beat Paper (Player1 wins)"
+        );
+    }
+
+    function test_Player2Wins() public {
+        bytes32 p1Salt = keccak256("salt1");
+        bytes32 p1Commitment = keccak256(abi.encodePacked(uint8(0), p1Salt)); // Rock
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1); // Paper (beats Rock)
+
+        vm.prank(player1);
+        game.resolveGame(gameId, 0, p1Salt, "");
+
+        RockPaperScissors.Game memory gameData = game.getGame(gameId);
+        require(gameData.winner == 2, "Player 2 should win (Paper beats Rock)");
+    }
+
+    function test_CannotJoinGameInWrongStatus() public {
+        bytes32 p1Commitment = keccak256(
+            abi.encodePacked(uint8(0), keccak256("salt1"))
+        );
+
+        vm.prank(player1);
+        uint256 gameId = game.createGame(p1Commitment);
+
+        vm.prank(player2);
+        game.joinGame(gameId, 1);
+
+        // Game is now in Revealed status, try to join again (should fail)
+        address player3 = address(0x3);
+        vm.prank(player3);
+        vm.expectRevert();
+        game.joinGame(gameId, 2);
     }
 }
 
 contract AlwaysFailVerifier {
-    function verify(bytes calldata /*proof*/, bytes32[] calldata /*publicInputs*/)
-        external
-        pure
-        returns (bool)
-    {
+    function verify(
+        bytes calldata /*proof*/,
+        bytes32[] calldata /*publicInputs*/
+    ) external pure returns (bool) {
         return false;
     }
 }

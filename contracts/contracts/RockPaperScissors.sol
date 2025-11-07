@@ -17,6 +17,9 @@ contract RockPaperScissors {
     // Move values: Rock = 0, Paper = 1, Scissors = 2
     // Winner: 0 = tie, 1 = player1, 2 = player2
 
+    // Timeout for Player 1 to reveal after Player 2 joins (5 minutes)
+    uint256 public constant REVEAL_TIMEOUT = 5 minutes;
+
     enum GameStatus {
         WaitingForPlayer,
         Committed,
@@ -30,12 +33,11 @@ contract RockPaperScissors {
         address player2;
         GameStatus status;
         bytes32 player1Commitment;
-        bytes32 player2Commitment;
         uint8 player1Move;
         uint8 player2Move;
         uint8 winner; // 0 = tie, 1 = player1, 2 = player2
         uint256 createdAt;
-        uint256 committedAt;
+        uint256 revealDeadline; // Timestamp when P1 must reveal by
     }
 
     // Storage
@@ -47,14 +49,17 @@ contract RockPaperScissors {
     address public immutable deployer;
 
     // Events
-    event GameCreated(uint256 indexed gameId, address indexed player1);
-
-    event PlayerJoined(uint256 indexed gameId, address indexed player2);
-
-    event MoveCommitted(
+    event GameCreated(
         uint256 indexed gameId,
-        address indexed player,
+        address indexed player1,
         bytes32 commitment
+    );
+
+    event PlayerJoined(
+        uint256 indexed gameId,
+        address indexed player2,
+        uint8 move2,
+        uint256 revealDeadline
     );
 
     event MoveRevealed(
@@ -68,6 +73,8 @@ contract RockPaperScissors {
         uint256 indexed gameId,
         uint8 winner // 0 = tie, 1 = player1, 2 = player2
     );
+
+    event GameForfeited(uint256 indexed gameId);
 
     constructor() {
         deployer = msg.sender;
@@ -84,156 +91,124 @@ contract RockPaperScissors {
     }
 
     /**
-     * @dev Create a new game
+     * @dev Create a new game with Player 1's commitment
+     * @param commitment The hash of (move || salt) for Player 1
      * @return gameId The ID of the newly created game
      */
-    function createGame() external returns (uint256) {
+    function createGame(bytes32 commitment) external returns (uint256) {
         uint256 gameId = gameCounter++;
 
         games[gameId] = Game({
             gameId: gameId,
             player1: msg.sender,
             player2: address(0),
-            status: GameStatus.WaitingForPlayer,
-            player1Commitment: bytes32(0),
-            player2Commitment: bytes32(0),
+            status: GameStatus.Committed,
+            player1Commitment: commitment,
             player1Move: 255, // Invalid move (will be set on reveal)
-            player2Move: 255, // Invalid move (will be set on reveal)
+            player2Move: 255, // Invalid move (will be set when P2 joins)
             winner: 0,
             createdAt: block.timestamp,
-            committedAt: 0
+            revealDeadline: 0 // Will be set when P2 joins
         });
 
-        emit GameCreated(gameId, msg.sender);
+        emit GameCreated(gameId, msg.sender, commitment);
         return gameId;
     }
 
     /**
-     * @dev Join an existing game
+     * @dev Join an existing game and submit Player 2's move
      * @param gameId The ID of the game to join
+     * @param move2 Player 2's move (0=rock, 1=paper, 2=scissors)
      */
-    function joinGame(uint256 gameId) external {
+    function joinGame(uint256 gameId, uint8 move2) external {
         Game storage game = games[gameId];
 
-        require(
-            game.status == GameStatus.WaitingForPlayer,
-            "Game not available"
-        );
+        require(game.status == GameStatus.Committed, "Game not available");
         require(msg.sender != game.player1, "Cannot play against yourself");
         require(game.player2 == address(0), "Game already has two players");
+        require(move2 < 3, "Invalid move (must be 0, 1, or 2)");
 
         game.player2 = msg.sender;
-        game.status = GameStatus.Committed; // Ready for commitments
+        game.player2Move = move2;
+        game.revealDeadline = block.timestamp + REVEAL_TIMEOUT;
+        game.status = GameStatus.Revealed; // Ready for P1 to reveal
 
-        emit PlayerJoined(gameId, msg.sender);
+        emit PlayerJoined(gameId, msg.sender, move2, game.revealDeadline);
     }
 
     /**
-     * @dev Commit a move (hash of move + salt)
+     * @dev Resolve game with Player 1's move, salt, and ZK proof
+     * Player 2's move is already stored on-chain from joinGame()
      * @param gameId The ID of the game
-     * @param commitment The hash of (move || salt)
+     * @param move1 Player 1's move (0=rock, 1=paper, 2=scissors)
+     * @param salt1 Player 1's salt
+     * @param proof ZK proof proving winner calculation
      */
-    function commitMove(uint256 gameId, bytes32 commitment) external {
-        Game storage game = games[gameId];
-
-        require(
-            msg.sender == game.player1 || msg.sender == game.player2,
-            "Not a player in this game"
-        );
-        require(
-            game.status == GameStatus.Committed,
-            "Game not ready for commitments"
-        );
-        require(game.player2 != address(0), "Game needs two players");
-
-        if (msg.sender == game.player1) {
-            require(game.player1Commitment == bytes32(0), "Already committed");
-            game.player1Commitment = commitment;
-        } else {
-            require(game.player2Commitment == bytes32(0), "Already committed");
-            game.player2Commitment = commitment;
-        }
-
-        emit MoveCommitted(gameId, msg.sender, commitment);
-
-        // If both players have committed, game is ready for reveals
-        if (
-            game.player1Commitment != bytes32(0) &&
-            game.player2Commitment != bytes32(0)
-        ) {
-            game.committedAt = block.timestamp;
-        }
-    }
-
-    /**
-     * @dev Reveal a move with salt and ZK proof
-     * @param gameId The ID of the game
-     * @param move The move (0=rock, 1=paper, 2=scissors)
-     * @param salt The salt used in the commitment
-     */
-    function revealMove(
+    function resolveGame(
         uint256 gameId,
-        uint8 move,
-        bytes32 salt,
+        uint8 move1,
+        bytes32 salt1,
         bytes calldata proof
     ) external {
         Game storage game = games[gameId];
 
         require(
-            msg.sender == game.player1 || msg.sender == game.player2,
-            "Not a player in this game"
+            game.player1Commitment != bytes32(0),
+            "Player 1 must commit first"
         );
+        require(game.status != GameStatus.Completed, "Game already resolved");
+        require(game.status == GameStatus.Revealed, "Player 2 must join first");
+        require(block.timestamp <= game.revealDeadline, "Deadline passed");
+        require(move1 < 3, "Invalid move (must be 0, 1, or 2)");
+        require(game.player2Move < 3, "Player 2 move not set");
+
+        // Verify Player 1's commitment matches
+        bytes32 commitment1 = keccak256(abi.encodePacked(move1, salt1));
         require(
-            game.player1Commitment != bytes32(0) &&
-                game.player2Commitment != bytes32(0),
-            "Both players must commit first"
+            game.player1Commitment == commitment1,
+            "Invalid commitment for player1"
         );
-        require(move < 3, "Invalid move (must be 0, 1, or 2)");
 
-        // Verify commitment matches
-        bytes32 commitment = keccak256(abi.encodePacked(move, salt));
+        // Store Player 1's move (Player 2's move already stored)
+        game.player1Move = move1;
 
-        if (msg.sender == game.player1) {
-            require(
-                game.player1Commitment == commitment,
-                "Invalid commitment for player1"
-            );
-            require(game.player1Move == 255, "Already revealed");
-            game.player1Move = move;
-        } else {
-            require(
-                game.player2Commitment == commitment,
-                "Invalid commitment for player2"
-            );
-            require(game.player2Move == 255, "Already revealed");
-            game.player2Move = move;
+        emit MoveRevealed(gameId, game.player1, move1, salt1);
+
+        // If verifier is set, validate ZK proof
+        if (address(verifier) != address(0)) {
+            uint8 computedWinner = _determineWinner(move1, game.player2Move);
+
+            // Build public inputs: [player1_move, player2_move, winner]
+            bytes32[] memory publicInputs = new bytes32[](3);
+            publicInputs[0] = bytes32(uint256(move1));
+            publicInputs[1] = bytes32(uint256(game.player2Move));
+            publicInputs[2] = bytes32(uint256(computedWinner));
+
+            require(verifier.verify(proof, publicInputs), "Invalid ZK proof");
         }
 
-        emit MoveRevealed(gameId, msg.sender, move, salt);
+        _resolveGame(gameId);
+    }
 
-        // If both players have revealed, resolve the game
-        if (game.player1Move != 255 && game.player2Move != 255) {
-            // If verifier is set, validate ZK proof before resolving
-            if (address(verifier) != address(0)) {
-                uint8 computedWinner = _determineWinner(
-                    game.player1Move,
-                    game.player2Move
-                );
+    /**
+     * @dev Forfeit game if Player 1 fails to reveal by deadline
+     * Can be called by anyone after the deadline has passed
+     * @param gameId The ID of the game
+     */
+    function forfeitGame(uint256 gameId) external {
+        Game storage game = games[gameId];
 
-                // Build public inputs: [player1_move, player2_move, winner]
-                bytes32[] memory publicInputs = new bytes32[](3);
-                publicInputs[0] = bytes32(uint256(game.player1Move));
-                publicInputs[1] = bytes32(uint256(game.player2Move));
-                publicInputs[2] = bytes32(uint256(computedWinner));
+        require(game.status != GameStatus.Completed, "Game already resolved");
+        require(game.status == GameStatus.Revealed, "Game not in reveal phase");
+        require(game.player2 != address(0), "Player 2 not joined");
+        require(block.timestamp > game.revealDeadline, "Deadline not passed");
 
-                require(
-                    verifier.verify(proof, publicInputs),
-                    "Invalid ZK proof"
-                );
-            }
+        // Player 1 forfeits, Player 2 wins
+        game.winner = 2;
+        game.status = GameStatus.Completed;
 
-            _resolveGame(gameId);
-        }
+        emit GameForfeited(gameId);
+        emit GameResolved(gameId, 2);
     }
 
     /**
@@ -245,7 +220,7 @@ contract RockPaperScissors {
 
         require(
             game.player1Move != 255 && game.player2Move != 255,
-            "Both moves must be revealed"
+            "Both moves must be set"
         );
 
         uint8 winner = _determineWinner(game.player1Move, game.player2Move);

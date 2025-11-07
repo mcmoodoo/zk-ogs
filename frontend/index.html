@@ -43,35 +43,16 @@
       </div>
     </div>
 
-    <!-- Game Actions -->
+    <!-- Move Selection - MUST BE FIRST -->
     <div class="glass-card rounded-3xl p-6 slide-up">
       <h2 class="game-font text-2xl font-bold mb-4 text-gray-800 flex items-center gap-2">
-        <span class="text-3xl">🎯</span> Game Actions
+        <span class="text-3xl">✊</span> Step 1: Make Your Move
       </h2>
-      <div class="flex flex-wrap gap-3 mb-4">
-        <button id="createGameBtn" class="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-700 hover:to-emerald-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl">
-          ✨ Create Game
-        </button>
-        <div class="flex gap-3 flex-1 min-w-[200px]">
-          <input 
-            type="number" 
-            id="gameIdInput" 
-            placeholder="Enter Game ID" 
-            class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-xl focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all outline-none"
-          >
-          <button id="joinGameBtn" class="px-6 py-3 bg-gradient-to-r from-orange-600 to-red-600 text-white font-semibold rounded-xl hover:from-orange-700 hover:to-red-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl">
-            🚀 Join Game
-          </button>
-        </div>
+      <div class="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-3 mb-4">
+        <p class="text-sm text-yellow-800 font-semibold">
+          ⚠️ <strong>Important:</strong> You must select your move BEFORE creating or joining a game!
+        </p>
       </div>
-      <div id="gameStatus" class="mt-4"></div>
-    </div>
-
-    <!-- Move Selection -->
-    <div class="glass-card rounded-3xl p-6 slide-up">
-      <h2 class="game-font text-2xl font-bold mb-6 text-gray-800 flex items-center gap-2">
-        <span class="text-3xl">✊</span> Make Your Move
-      </h2>
       <div class="flex flex-wrap justify-center gap-6 mb-6">
         <button id="rockBtn" class="move-btn rock-btn px-8 py-6 text-white font-bold text-xl rounded-2xl shadow-2xl min-w-[140px]">
           <span class="text-4xl block mb-2">🪨</span>
@@ -89,15 +70,52 @@
       <div id="moveStatus" class="text-center"></div>
     </div>
 
-    <!-- Reveal Section -->
+    <!-- Game Actions -->
     <div class="glass-card rounded-3xl p-6 slide-up">
       <h2 class="game-font text-2xl font-bold mb-4 text-gray-800 flex items-center gap-2">
-        <span class="text-3xl">🔓</span> Reveal Move
+        <span class="text-3xl">🎯</span> Step 2: Game Actions
+      </h2>
+      <div class="flex flex-wrap gap-3 mb-4">
+        <div class="flex flex-col gap-2">
+          <button id="createGameBtn" class="px-6 py-3 bg-gray-400 text-white font-semibold rounded-xl cursor-not-allowed transition-all duration-200" disabled>
+            ✨ Create Game (Select move first)
+          </button>
+          <p class="text-xs text-gray-600">Player 1: Select move above, then create game</p>
+        </div>
+        <div class="flex flex-col gap-2 flex-1 min-w-[200px]">
+          <div class="flex gap-3">
+            <input 
+              type="number" 
+              id="gameIdInput" 
+              placeholder="Enter Game ID" 
+              class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-xl focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all outline-none"
+            >
+            <button id="joinGameBtn" class="px-6 py-3 bg-gray-400 text-white font-semibold rounded-xl cursor-not-allowed transition-all duration-200" disabled>
+              🚀 Join Game
+            </button>
+          </div>
+          <p class="text-xs text-gray-600">Player 2: Select move above, enter Game ID, then join</p>
+        </div>
+      </div>
+      <div id="gameStatus" class="mt-4"></div>
+    </div>
+
+    <!-- Game Resolution -->
+    <div class="glass-card rounded-3xl p-6 slide-up">
+      <h2 class="game-font text-2xl font-bold mb-4 text-gray-800 flex items-center gap-2">
+        <span class="text-3xl">🎯</span> Game Resolution
       </h2>
       <div class="flex flex-col items-center gap-4">
-        <button id="revealBtn" disabled class="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold text-lg rounded-xl hover:from-purple-700 hover:to-pink-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:hover:shadow-lg">
-          🔓 Reveal Move
-        </button>
+        <div class="bg-blue-50 border-2 border-blue-200 rounded-xl p-4 w-full">
+          <p class="text-sm text-blue-800 font-semibold mb-2">📋 New Flow:</p>
+          <ul class="text-xs text-blue-700 space-y-1 list-disc list-inside">
+            <li><strong>Player 1:</strong> Select move → Create game (move is committed)</li>
+            <li><strong>Player 2:</strong> Select move → Join game (move submitted directly)</li>
+            <li><strong>Player 1:</strong> Reveal move with ZK proof (within 5 minutes)</li>
+            <li><strong>Timeout:</strong> If Player 1 doesn't reveal in time, they forfeit</li>
+          </ul>
+        </div>
+        <div id="deadlineDisplay" class="w-full"></div>
         <div id="revealStatus"></div>
       </div>
     </div>
