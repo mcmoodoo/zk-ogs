@@ -81,7 +81,8 @@ abstract contract Deployers {
 
     function deployPoolManager() internal virtual {
         if (block.chainid == 31337) {
-            // For local Anvil, always deploy fresh - scripts will reuse if needed via environment
+            // For local Anvil, always deploy - if it already exists, the deployer will handle it
+            // The deployer uses CREATE2, so addresses are deterministic
             poolManager = IPoolManager(V4PoolManagerDeployer.deploy(address(0x4444)));
         } else {
             poolManager = IPoolManager(AddressConstants.getPoolManagerAddress(block.chainid));

@@ -53,43 +53,54 @@ get-hook-address:
 # ============================================================================
 
 # Deploy test tokens for local development
-# Usage: just deploy-tokens [RPC_URL=...] [PRIVATE_KEY=...] [ACCOUNT=''] [SENDER='']
-deploy-tokens RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" ACCOUNT='' SENDER='':
+# Usage: just deploy-tokens [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...]
+# Note: For local Anvil, PRIVATE_KEY defaults to Anvil's first account key if not provided
+deploy-tokens RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80":
     #!/usr/bin/env bash
     set -e
     
-    RPC_ARG="--rpc-url {{RPC_URL}}"
-    PRIVATE_KEY_ARG=""
-    ACCOUNT_ARG=""
-    SENDER_ARG=""
-    
-    # Use private key for local Anvil
-    PRIVATE_KEY_VAL="{{PRIVATE_KEY}}"
-    if [ -n "$PRIVATE_KEY_VAL" ] && [ "$PRIVATE_KEY_VAL" != "" ]; then
-        PRIVATE_KEY_ARG="--private-key $PRIVATE_KEY_VAL"
+    # Check if tokens are already deployed
+    if [ -f .token0_address ] && [ -f .token1_address ]; then
+        TOKEN0=$(cat .token0_address)
+        TOKEN1=$(cat .token1_address)
+        # Check if contracts have code at these addresses
+        CODE0=$(cast code "$TOKEN0" --rpc-url {{RPC_URL}} 2>/dev/null || echo "")
+        CODE1=$(cast code "$TOKEN1" --rpc-url {{RPC_URL}} 2>/dev/null || echo "")
+        if [ -n "$CODE0" ] && [ -n "$CODE1" ] && [ "$CODE0" != "0x" ] && [ "$CODE1" != "0x" ]; then
+            echo "✓ Tokens already deployed:"
+            echo "  Token0: $TOKEN0"
+            echo "  Token1: $TOKEN1"
+            echo "Skipping token deployment."
+            exit 0
+        fi
     fi
     
-    # Only use --account if explicitly provided
-    if [ -n "{{ACCOUNT}}" ] && [ "{{ACCOUNT}}" != "default" ] && [ "{{ACCOUNT}}" != "" ]; then
-        ACCOUNT_ARG="--account {{ACCOUNT}}"
-    fi
-    
-    if [ -n "{{SENDER}}" ] && [ "{{SENDER}}" != "''" ] && [ "{{SENDER}}" != "" ]; then
-        SENDER_ARG="--sender {{SENDER}}"
-    fi
+    # Use the provided private key (defaults to Anvil's first account)
+    # Justfile expands {{PRIVATE_KEY}} but may include quotes, so clean it
+    PK_VAL="{{PRIVATE_KEY}}"
+    PK_VAL=$(echo "$PK_VAL" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" | xargs)
     
     echo "Deploying test tokens..."
-    forge script script/00_DeployTokens.s.sol \
-        $RPC_ARG \
-        $PRIVATE_KEY_ARG \
-        $ACCOUNT_ARG \
-        $SENDER_ARG \
-        --broadcast
+    # Capture the full output including broadcast results
+    OUTPUT=$(forge script script/00_DeployTokens.s.sol \
+        --rpc-url {{RPC_URL}} \
+        --private-key "$PK_VAL" \
+        --broadcast 2>&1 || true)
     
-    # Extract token addresses from output
-    OUTPUT=$(forge script script/00_DeployTokens.s.sol $RPC_ARG $PRIVATE_KEY_ARG 2>&1 || true)
+    # Extract token addresses from the broadcast output
+    # The addresses are in the "Deployed Token0 at:" and "Deployed Token1 at:" log lines
     TOKEN0=$(echo "$OUTPUT" | grep -oP 'Deployed Token0 at: \K0x[a-fA-F0-9]{40}' || echo "")
     TOKEN1=$(echo "$OUTPUT" | grep -oP 'Deployed Token1 at: \K0x[a-fA-F0-9]{40}' || echo "")
+    
+    # If not found, try alternative patterns from the logs section
+    if [ -z "$TOKEN0" ] || [ -z "$TOKEN1" ]; then
+        # Look in the logs section
+        LOGS_SECTION=$(echo "$OUTPUT" | sed -n '/== Logs ==/,/==/p' || echo "")
+        if [ -n "$LOGS_SECTION" ]; then
+            [ -z "$TOKEN0" ] && TOKEN0=$(echo "$LOGS_SECTION" | grep -i "token0" | grep -oP '0x[a-fA-F0-9]{40}' | head -1 || echo "")
+            [ -z "$TOKEN1" ] && TOKEN1=$(echo "$LOGS_SECTION" | grep -i "token1" | grep -oP '0x[a-fA-F0-9]{40}' | tail -1 || echo "")
+        fi
+    fi
     
     if [ -n "$TOKEN0" ] && [ -n "$TOKEN1" ]; then
         echo "$TOKEN0" > .token0_address
@@ -102,57 +113,98 @@ deploy-tokens RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}
     fi
 
 # Deploy the RPS Hook contract
-# Usage: just deploy-hook [RPC_URL=http://localhost:8545] [PRIVATE_KEY=...] [ACCOUNT=''] [SENDER='']
-deploy-hook RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" ACCOUNT='' SENDER='':
+# Usage: just deploy-hook [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...]
+# Note: PRIVATE_KEY defaults to Anvil's first account key if not provided
+deploy-hook RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" ACCOUNT='' SENDER='':
     #!/usr/bin/env bash
     set -e
+    
+    # Check if hook is already deployed
+    if [ -f {{hook-address-file}} ]; then
+        HOOK_ADDR=$(cat {{hook-address-file}})
+        # Check if contract has code at this address
+        CODE=$(cast code "$HOOK_ADDR" --rpc-url {{RPC_URL}} 2>/dev/null || echo "")
+        if [ -n "$CODE" ] && [ "$CODE" != "0x" ]; then
+            echo "✓ Hook already deployed at: $HOOK_ADDR"
+            echo "Skipping hook deployment."
+            exit 0
+        fi
+    fi
     
     RPC_ARG="--rpc-url {{RPC_URL}}"
     ACCOUNT_ARG=""
     SENDER_ARG=""
     
     # Only use --account if explicitly provided and not empty
-    # For local Anvil, we typically don't need --account
     ACCOUNT_VAL="{{ACCOUNT}}"
     if [ -n "$ACCOUNT_VAL" ] && [ "$ACCOUNT_VAL" != "" ]; then
-        ACCOUNT_ARG="--account $ACCOUNT_VAL"
+        ACCOUNT_ARG="--account"
+        ACCOUNT_VALUE="$ACCOUNT_VAL"
+    else
+        ACCOUNT_ARG=""
+        ACCOUNT_VALUE=""
     fi
     
     SENDER_VAL="{{SENDER}}"
     if [ -n "$SENDER_VAL" ] && [ "$SENDER_VAL" != "''" ] && [ "$SENDER_VAL" != "" ]; then
-        SENDER_ARG="--sender $SENDER_VAL"
+        SENDER_ARG="--sender"
+        SENDER_VALUE="$SENDER_VAL"
+    else
+        SENDER_ARG=""
+        SENDER_VALUE=""
     fi
     
     # Use private key for local Anvil, or account for other networks
     PRIVATE_KEY_VAL="{{PRIVATE_KEY}}"
-    PRIVATE_KEY_ARG=""
-    if [ -n "$PRIVATE_KEY_VAL" ] && [ "$PRIVATE_KEY_VAL" != "" ]; then
-        PRIVATE_KEY_ARG="--private-key $PRIVATE_KEY_VAL"
+    PK_VAL=$(echo "$PRIVATE_KEY_VAL" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" | xargs)
+    if [ -n "$PK_VAL" ] && [ "$PK_VAL" != "" ]; then
+        PRIVATE_KEY_ARG="--private-key"
+        PRIVATE_KEY_VALUE="$PK_VAL"
+    else
+        PRIVATE_KEY_ARG=""
+        PRIVATE_KEY_VALUE=""
     fi
     
     echo "Deploying RPS Hook..."
-    # Build forge command - only include flags if they're set
-    FORGE_CMD="forge script script/00_DeployHook.s.sol $RPC_ARG"
-    [ -n "$PRIVATE_KEY_ARG" ] && FORGE_CMD="$FORGE_CMD $PRIVATE_KEY_ARG"
-    [ -n "$ACCOUNT_ARG" ] && FORGE_CMD="$FORGE_CMD $ACCOUNT_ARG"
-    [ -n "$SENDER_ARG" ] && FORGE_CMD="$FORGE_CMD $SENDER_ARG"
-    FORGE_CMD="$FORGE_CMD --broadcast"
     
-    eval $FORGE_CMD
-    
-    # Extract hook address from output and save it
-    EXTRACT_CMD="forge script script/00_DeployHook.s.sol $RPC_ARG"
-    [ -n "$PRIVATE_KEY_ARG" ] && EXTRACT_CMD="$EXTRACT_CMD $PRIVATE_KEY_ARG"
-    [ -n "$ACCOUNT_ARG" ] && EXTRACT_CMD="$EXTRACT_CMD $ACCOUNT_ARG"
-    [ -n "$SENDER_ARG" ] && EXTRACT_CMD="$EXTRACT_CMD $SENDER_ARG"
-    
-    # Add V4 infrastructure addresses if available
+    # Load PoolManager address if available
     if [ -f {{pool-manager-file}} ]; then
         POOL_MGR=$(cat {{pool-manager-file}})
-        EXTRACT_CMD="POOL_MANAGER_ADDRESS=$POOL_MGR $EXTRACT_CMD"
+        export POOL_MANAGER_ADDRESS=$POOL_MGR
     fi
     
-    HOOK_ADDR=$(eval $EXTRACT_CMD 2>&1 | grep -oP 'Deployed RPSHook at: \K0x[a-fA-F0-9]{40}' || echo "")
+    # Build and run the deployment command, capturing output
+    PK_VAL=$(echo "$PRIVATE_KEY_VAL" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" | xargs)
+    
+    # Build command array
+    CMD_ARGS=("script/00_DeployHook.s.sol" $RPC_ARG)
+    if [ -n "$PK_VAL" ] && [ "$PK_VAL" != "" ]; then
+        CMD_ARGS+=("--private-key" "$PK_VAL")
+    fi
+    [ -n "$ACCOUNT_ARG" ] && [ -n "$ACCOUNT_VALUE" ] && CMD_ARGS+=($ACCOUNT_ARG "$ACCOUNT_VALUE")
+    [ -n "$SENDER_ARG" ] && [ -n "$SENDER_VALUE" ] && CMD_ARGS+=($SENDER_ARG "$SENDER_VALUE")
+    CMD_ARGS+=(--broadcast)
+    
+    # Run deployment and capture output
+    OUTPUT=$(forge script "${CMD_ARGS[@]}" 2>&1 || true)
+    echo "$OUTPUT"
+    
+    # Extract hook address from the output
+    # Pattern 1: "Deployed RPSHook at: 0x..."
+    HOOK_ADDR=$(echo "$OUTPUT" | grep -oP 'Deployed RPSHook at: \K0x[a-fA-F0-9]{40}' || echo "")
+    
+    # Pattern 2: Look in the logs section
+    if [ -z "$HOOK_ADDR" ]; then
+        LOGS_SECTION=$(echo "$OUTPUT" | sed -n '/== Logs ==/,/==/p' || echo "")
+        if [ -n "$LOGS_SECTION" ]; then
+            HOOK_ADDR=$(echo "$LOGS_SECTION" | grep -i "rpshook" | grep -oP '0x[a-fA-F0-9]{40}' | head -1 || echo "")
+        fi
+    fi
+    
+    # Pattern 3: Look for any line with "RPSHook" and an address
+    if [ -z "$HOOK_ADDR" ]; then
+        HOOK_ADDR=$(echo "$OUTPUT" | grep -i "rpshook" | grep -oP '0x[a-fA-F0-9]{40}' | head -1 || echo "")
+    fi
     
     if [ -n "$HOOK_ADDR" ]; then
         echo "$HOOK_ADDR" > {{hook-address-file}}
@@ -169,9 +221,47 @@ deploy-hook RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" 
     fi
 
 # Deploy V4 artifacts locally (for Anvil)
-deploy-v4 RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" ACCOUNT='' SENDER='':
+# Usage: just deploy-v4 [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...]
+deploy-v4 RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" ACCOUNT='' SENDER='':
     #!/usr/bin/env bash
     set -e
+    
+    # Check if V4 contracts are already deployed
+    # V4 contracts use CREATE2, so addresses are deterministic
+    # Known deterministic addresses for local Anvil (chainId 31337):
+    # PoolManager: 0x0D9BAf34817Fccd3b3068768E5d20542B66424A5
+    # PositionManager: 0x90aAE8e3C8dF1d226431D0C2C7feAaa775fAF86C
+    # Router: 0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6
+    
+    # First check if we have saved addresses
+    if [ -f {{pool-manager-file}} ] && [ -f {{position-manager-file}} ] && [ -f {{router-file}} ]; then
+        POOL_MGR=$(cat {{pool-manager-file}})
+        POS_MGR=$(cat {{position-manager-file}})
+        ROUTER=$(cat {{router-file}})
+    else
+        # Use known deterministic addresses for local Anvil
+        POOL_MGR="0x0D9BAf34817Fccd3b3068768E5d20542B66424A5"
+        POS_MGR="0x90aAE8e3C8dF1d226431D0C2C7feAaa775fAF86C"
+        ROUTER="0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6"
+    fi
+    
+    # Check if contracts have code at these addresses
+    CODE_PM=$(cast code "$POOL_MGR" --rpc-url {{RPC_URL}} 2>/dev/null || echo "")
+    CODE_POS=$(cast code "$POS_MGR" --rpc-url {{RPC_URL}} 2>/dev/null || echo "")
+    CODE_RTR=$(cast code "$ROUTER" --rpc-url {{RPC_URL}} 2>/dev/null || echo "")
+    if [ -n "$CODE_PM" ] && [ -n "$CODE_POS" ] && [ -n "$CODE_RTR" ] && \
+       [ "$CODE_PM" != "0x" ] && [ "$CODE_POS" != "0x" ] && [ "$CODE_RTR" != "0x" ]; then
+        # Save addresses to files if not already saved
+        [ ! -f {{pool-manager-file}} ] && echo "$POOL_MGR" > {{pool-manager-file}}
+        [ ! -f {{position-manager-file}} ] && echo "$POS_MGR" > {{position-manager-file}}
+        [ ! -f {{router-file}} ] && echo "$ROUTER" > {{router-file}}
+        echo "✓ V4 contracts already deployed:"
+        echo "  PoolManager: $POOL_MGR"
+        echo "  PositionManager: $POS_MGR"
+        echo "  Router: $ROUTER"
+        echo "Skipping V4 deployment."
+        exit 0
+    fi
     
     RPC_ARG="--rpc-url {{RPC_URL}}"
     PRIVATE_KEY_ARG=""
@@ -181,30 +271,50 @@ deploy-v4 RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" AC
     # Use private key for local Anvil
     PRIVATE_KEY_VAL="{{PRIVATE_KEY}}"
     if [ -n "$PRIVATE_KEY_VAL" ] && [ "$PRIVATE_KEY_VAL" != "" ]; then
-        PRIVATE_KEY_ARG="--private-key $PRIVATE_KEY_VAL"
+        PRIVATE_KEY_ARG="--private-key"
+        PRIVATE_KEY_VALUE="$PRIVATE_KEY_VAL"
+    else
+        PRIVATE_KEY_ARG=""
+        PRIVATE_KEY_VALUE=""
     fi
     
     # Only use --account if explicitly provided
-    if [ -n "{{ACCOUNT}}" ] && [ "{{ACCOUNT}}" != "default" ] && [ "{{ACCOUNT}}" != "" ]; then
-        ACCOUNT_ARG="--account {{ACCOUNT}}"
+    ACCOUNT_VAL="{{ACCOUNT}}"
+    if [ -n "$ACCOUNT_VAL" ] && [ "$ACCOUNT_VAL" != "default" ] && [ "$ACCOUNT_VAL" != "" ]; then
+        ACCOUNT_ARG="--account"
+        ACCOUNT_VALUE="$ACCOUNT_VAL"
+    else
+        ACCOUNT_ARG=""
+        ACCOUNT_VALUE=""
     fi
     
-    if [ -n "{{SENDER}}" ] && [ "{{SENDER}}" != "''" ] && [ "{{SENDER}}" != "" ]; then
-        SENDER_ARG="--sender {{SENDER}}"
+    SENDER_VAL="{{SENDER}}"
+    if [ -n "$SENDER_VAL" ] && [ "$SENDER_VAL" != "''" ] && [ "$SENDER_VAL" != "" ]; then
+        SENDER_ARG="--sender"
+        SENDER_VALUE="$SENDER_VAL"
+    else
+        SENDER_ARG=""
+        SENDER_VALUE=""
     fi
     
     echo "Deploying V4 artifacts to local network..."
-    forge script script/testing/00_DeployV4.s.sol \
-        $RPC_ARG \
-        $PRIVATE_KEY_ARG \
-        $ACCOUNT_ARG \
-        $SENDER_ARG \
-        --broadcast
+    # Build command array to avoid empty argument issues
+    CMD_ARGS=("script/testing/00_DeployV4.s.sol" $RPC_ARG)
+    [ -n "$PRIVATE_KEY_ARG" ] && CMD_ARGS+=($PRIVATE_KEY_ARG "$PRIVATE_KEY_VALUE")
+    [ -n "$ACCOUNT_ARG" ] && CMD_ARGS+=($ACCOUNT_ARG "$ACCOUNT_VALUE")
+    [ -n "$SENDER_ARG" ] && CMD_ARGS+=($SENDER_ARG "$SENDER_VALUE")
+    CMD_ARGS+=(--broadcast)
+    
+    forge script "${CMD_ARGS[@]}"
     
     # Extract and save addresses from output
     echo ""
     echo "Extracting deployed addresses..."
-    OUTPUT=$(forge script script/testing/00_DeployV4.s.sol $RPC_ARG $PRIVATE_KEY_ARG 2>&1 || true)
+    if [ -n "$PRIVATE_KEY_ARG" ]; then
+        OUTPUT=$(forge script script/testing/00_DeployV4.s.sol $RPC_ARG $PRIVATE_KEY_ARG "$PRIVATE_KEY_VALUE" 2>&1 || true)
+    else
+        OUTPUT=$(forge script script/testing/00_DeployV4.s.sol $RPC_ARG 2>&1 || true)
+    fi
     
     POOL_MGR=$(echo "$OUTPUT" | grep -oP 'Deployed V4PoolManager at: \K0x[a-fA-F0-9]{40}' || echo "")
     POS_MGR=$(echo "$OUTPUT" | grep -oP 'Deployed V4PositionManager at: \K0x[a-fA-F0-9]{40}' || echo "")
@@ -228,21 +338,35 @@ deploy-v4 RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" AC
 # ============================================================================
 
 # Create a new pool and add initial liquidity
-# Usage: just create-pool [RPC_URL=...] [PRIVATE_KEY=...] [ACCOUNT=''] [SENDER=''] [HOOK_ADDRESS=]
-create-pool RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" ACCOUNT='' SENDER='' HOOK_ADDRESS="":
+# Usage: just create-pool [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...]
+# Note: HOOK_ADDRESS can be provided via environment variable or will be loaded from .hook_address file
+create-pool RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" ACCOUNT='' SENDER='':
     #!/usr/bin/env bash
     set -e
     
-    # Load hook address from file if not provided
-    if [ -z "{{HOOK_ADDRESS}}" ] && [ -f {{hook-address-file}} ]; then
+    # Load hook address from environment variable or file
+    if [ -z "$HOOK_ADDRESS" ] && [ -f {{hook-address-file}} ]; then
         HOOK_ADDRESS=$(cat {{hook-address-file}})
+        export HOOK_ADDRESS
         echo "Using hook address from file: $HOOK_ADDRESS"
-    elif [ -z "{{HOOK_ADDRESS}}" ]; then
+    elif [ -z "$HOOK_ADDRESS" ]; then
         echo "Error: HOOK_ADDRESS not set and not found in {{hook-address-file}}"
         echo "Please set HOOK_ADDRESS environment variable or run 'just deploy-hook' first"
         exit 1
     else
-        HOOK_ADDRESS="{{HOOK_ADDRESS}}"
+        export HOOK_ADDRESS
+        echo "Using hook address from environment: $HOOK_ADDRESS"
+    fi
+    
+    # Load token addresses from files if available (from deploy-tokens)
+    if [ -f .token0_address ] && [ -f .token1_address ]; then
+        TOKEN0=$(cat .token0_address)
+        TOKEN1=$(cat .token1_address)
+        export TOKEN0_ADDRESS="$TOKEN0"
+        export TOKEN1_ADDRESS="$TOKEN1"
+        echo "Using deployed tokens:"
+        echo "  TOKEN0_ADDRESS=$TOKEN0"
+        echo "  TOKEN1_ADDRESS=$TOKEN1"
     fi
     
     RPC_ARG="--rpc-url {{RPC_URL}}"
@@ -252,21 +376,35 @@ create-pool RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" 
     
     # Use private key for local Anvil, or account for other networks
     PRIVATE_KEY_VAL="{{PRIVATE_KEY}}"
-    if [ -n "$PRIVATE_KEY_VAL" ] && [ "$PRIVATE_KEY_VAL" != "" ]; then
-        PRIVATE_KEY_ARG="--private-key $PRIVATE_KEY_VAL"
+    PK_VAL=$(echo "$PRIVATE_KEY_VAL" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" | xargs)
+    if [ -n "$PK_VAL" ] && [ "$PK_VAL" != "" ]; then
+        PRIVATE_KEY_ARG="--private-key"
+        PRIVATE_KEY_VALUE="$PK_VAL"
+    else
+        PRIVATE_KEY_ARG=""
+        PRIVATE_KEY_VALUE=""
     fi
     
     # Only use --account if explicitly provided and not "default"
-    if [ -n "{{ACCOUNT}}" ] && [ "{{ACCOUNT}}" != "default" ] && [ "{{ACCOUNT}}" != "" ]; then
-        ACCOUNT_ARG="--account {{ACCOUNT}}"
+    ACCOUNT_VAL="{{ACCOUNT}}"
+    if [ -n "$ACCOUNT_VAL" ] && [ "$ACCOUNT_VAL" != "default" ] && [ "$ACCOUNT_VAL" != "" ]; then
+        ACCOUNT_ARG="--account"
+        ACCOUNT_VALUE="$ACCOUNT_VAL"
+    else
+        ACCOUNT_ARG=""
+        ACCOUNT_VALUE=""
     fi
     
-    if [ -n "{{SENDER}}" ] && [ "{{SENDER}}" != "''" ] && [ "{{SENDER}}" != "" ]; then
-        SENDER_ARG="--sender {{SENDER}}"
+    SENDER_VAL="{{SENDER}}"
+    if [ -n "$SENDER_VAL" ] && [ "$SENDER_VAL" != "''" ] && [ "$SENDER_VAL" != "" ]; then
+        SENDER_ARG="--sender"
+        SENDER_VALUE="$SENDER_VAL"
+    else
+        SENDER_ARG=""
+        SENDER_VALUE=""
     fi
     
     # Load V4 infrastructure addresses if available
-    export HOOK_ADDRESS=$HOOK_ADDRESS
     if [ -f {{pool-manager-file}} ]; then
         POOL_MGR=$(cat {{pool-manager-file}})
         export POOL_MANAGER_ADDRESS=$POOL_MGR
@@ -281,16 +419,18 @@ create-pool RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" 
     fi
     
     echo "Creating pool with hook: $HOOK_ADDRESS"
-    forge script script/01_CreatePoolAndAddLiquidity.s.sol \
-        $RPC_ARG \
-        $PRIVATE_KEY_ARG \
-        $ACCOUNT_ARG \
-        $SENDER_ARG \
-        --broadcast
+    # Build command array to avoid empty argument issues
+    CMD_ARGS=("script/01_CreatePoolAndAddLiquidity.s.sol" "--rpc-url" "{{RPC_URL}}")
+    [ -n "$PRIVATE_KEY_ARG" ] && CMD_ARGS+=($PRIVATE_KEY_ARG "$PRIVATE_KEY_VALUE")
+    [ -n "$ACCOUNT_ARG" ] && [ -n "$ACCOUNT_VALUE" ] && CMD_ARGS+=($ACCOUNT_ARG "$ACCOUNT_VALUE")
+    [ -n "$SENDER_ARG" ] && [ -n "$SENDER_VALUE" ] && CMD_ARGS+=($SENDER_ARG "$SENDER_VALUE")
+    CMD_ARGS+=(--broadcast)
+    
+    forge script "${CMD_ARGS[@]}"
 
 # Add liquidity to an existing pool
-# Usage: just add-liquidity [RPC_URL=...] [PRIVATE_KEY=...] [ACCOUNT=''] [SENDER=''] [HOOK_ADDRESS=]
-add-liquidity RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" ACCOUNT='' SENDER='' HOOK_ADDRESS="":
+# Usage: just add-liquidity [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...] [HOOK_ADDRESS=]
+add-liquidity RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" ACCOUNT='' SENDER='' HOOK_ADDRESS="":
     #!/usr/bin/env bash
     set -e
     
@@ -354,8 +494,8 @@ add-liquidity RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}
 # ============================================================================
 
 # Execute a regular swap
-# Usage: just swap [RPC_URL=...] [PRIVATE_KEY=...] [ACCOUNT=''] [SENDER=''] [HOOK_ADDRESS=]
-swap RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" ACCOUNT='' SENDER='' HOOK_ADDRESS="":
+# Usage: just swap [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...] [HOOK_ADDRESS=]
+swap RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" ACCOUNT='' SENDER='' HOOK_ADDRESS="":
     #!/usr/bin/env bash
     set -e
     
@@ -415,8 +555,8 @@ swap RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" ACCOUNT
         --broadcast
 
 # Execute a swap with commitment hash for RPS game
-# Usage: just swap-rps COMMITMENT_HASH [RPC_URL=...] [PRIVATE_KEY=...] [ACCOUNT=''] [SENDER=''] [HOOK_ADDRESS=]
-swap-rps COMMITMENT_HASH RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" ACCOUNT='' SENDER='' HOOK_ADDRESS="":
+# Usage: just swap-rps COMMITMENT_HASH [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...] [HOOK_ADDRESS=]
+swap-rps COMMITMENT_HASH RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" ACCOUNT='' SENDER='' HOOK_ADDRESS="":
     #!/usr/bin/env bash
     set -e
     
@@ -446,16 +586,30 @@ swap-rps COMMITMENT_HASH RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-pr
     # Use private key for local Anvil
     PRIVATE_KEY_VAL="{{PRIVATE_KEY}}"
     if [ -n "$PRIVATE_KEY_VAL" ] && [ "$PRIVATE_KEY_VAL" != "" ]; then
-        PRIVATE_KEY_ARG="--private-key $PRIVATE_KEY_VAL"
+        PRIVATE_KEY_ARG="--private-key"
+        PRIVATE_KEY_VALUE="$PRIVATE_KEY_VAL"
+    else
+        PRIVATE_KEY_ARG=""
+        PRIVATE_KEY_VALUE=""
     fi
     
     # Only use --account if explicitly provided
-    if [ -n "{{ACCOUNT}}" ] && [ "{{ACCOUNT}}" != "default" ] && [ "{{ACCOUNT}}" != "" ]; then
-        ACCOUNT_ARG="--account {{ACCOUNT}}"
+    ACCOUNT_VAL="{{ACCOUNT}}"
+    if [ -n "$ACCOUNT_VAL" ] && [ "$ACCOUNT_VAL" != "default" ] && [ "$ACCOUNT_VAL" != "" ]; then
+        ACCOUNT_ARG="--account"
+        ACCOUNT_VALUE="$ACCOUNT_VAL"
+    else
+        ACCOUNT_ARG=""
+        ACCOUNT_VALUE=""
     fi
     
-    if [ -n "{{SENDER}}" ] && [ "{{SENDER}}" != "''" ] && [ "{{SENDER}}" != "" ]; then
-        SENDER_ARG="--sender {{SENDER}}"
+    SENDER_VAL="{{SENDER}}"
+    if [ -n "$SENDER_VAL" ] && [ "$SENDER_VAL" != "''" ] && [ "$SENDER_VAL" != "" ]; then
+        SENDER_ARG="--sender"
+        SENDER_VALUE="$SENDER_VAL"
+    else
+        SENDER_ARG=""
+        SENDER_VALUE=""
     fi
     
     # Load V4 infrastructure addresses if available
@@ -476,12 +630,14 @@ swap-rps COMMITMENT_HASH RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-pr
     
     echo "Executing RPS swap with commitment: {{COMMITMENT_HASH}}"
     echo "Hook address: $HOOK_ADDRESS"
-    forge script script/03_Swap.s.sol \
-        $RPC_ARG \
-        $PRIVATE_KEY_ARG \
-        $ACCOUNT_ARG \
-        $SENDER_ARG \
-        --broadcast
+    # Build command array to avoid empty argument issues
+    CMD_ARGS=("script/03_Swap.s.sol" $RPC_ARG)
+    [ -n "$PRIVATE_KEY_ARG" ] && CMD_ARGS+=($PRIVATE_KEY_ARG "$PRIVATE_KEY_VALUE")
+    [ -n "$ACCOUNT_ARG" ] && CMD_ARGS+=($ACCOUNT_ARG "$ACCOUNT_VALUE")
+    [ -n "$SENDER_ARG" ] && CMD_ARGS+=($SENDER_ARG "$SENDER_VALUE")
+    CMD_ARGS+=(--broadcast)
+    
+    forge script "${CMD_ARGS[@]}"
 
 # ============================================================================
 # Development & Testing Commands
@@ -516,46 +672,35 @@ fmt:
 # ============================================================================
 
 # Complete setup: deploy V4 infrastructure, tokens, hook, create pool, and add initial liquidity
-# Usage: just setup [RPC_URL=...] [PRIVATE_KEY=...] [ACCOUNT=''] [SENDER='']
-setup RPC_URL="{{default-rpc-url}}" PRIVATE_KEY="{{default-private-key}}" ACCOUNT='' SENDER='':
+# Usage: just setup [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...]
+setup RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" ACCOUNT='' SENDER='':
     #!/usr/bin/env bash
     set -e
     
-    # Build command arguments conditionally with actual values
-    RPC_VAL="{{RPC_URL}}"
-    PRIVATE_KEY_VAL="{{PRIVATE_KEY}}"
-    ACCOUNT_VAL="{{ACCOUNT}}"
-    SENDER_VAL="{{SENDER}}"
-    
-    DEPLOY_ARGS="RPC_URL=$RPC_VAL"
-    # Add PRIVATE_KEY if set (for local Anvil)
-    if [ -n "$PRIVATE_KEY_VAL" ] && [ "$PRIVATE_KEY_VAL" != "" ]; then
-        DEPLOY_ARGS="$DEPLOY_ARGS PRIVATE_KEY=$PRIVATE_KEY_VAL"
-    fi
-    # Only add ACCOUNT if it's explicitly set and not empty
-    if [ -n "$ACCOUNT_VAL" ] && [ "$ACCOUNT_VAL" != "" ]; then
-        DEPLOY_ARGS="$DEPLOY_ARGS ACCOUNT=$ACCOUNT_VAL"
-    fi
-    # Only add SENDER if it's explicitly set
-    if [ -n "$SENDER_VAL" ] && [ "$SENDER_VAL" != "''" ] && [ "$SENDER_VAL" != "" ]; then
-        DEPLOY_ARGS="$DEPLOY_ARGS SENDER=$SENDER_VAL"
-    fi
-    
+    # All recipes use default values, so we can call them without arguments
+    # The defaults are set in each recipe signature
     echo "=== Step 1: Deploying Tokens ==="
-    just deploy-tokens $DEPLOY_ARGS
+    just deploy-tokens
     
     echo ""
     echo "=== Step 2: Deploying V4 Infrastructure ==="
-    just deploy-v4 $DEPLOY_ARGS
+    just deploy-v4
     
     echo ""
     echo "=== Step 3: Deploying Hook ==="
-    just deploy-hook $DEPLOY_ARGS
+    just deploy-hook
     
     echo ""
     echo "=== Step 4: Creating Pool and Adding Liquidity ==="
-    HOOK_ADDR=$(cat {{hook-address-file}})
-    just create-pool $DEPLOY_ARGS HOOK_ADDRESS="$HOOK_ADDR"
+    if [ -f .hook_address ]; then
+        HOOK_ADDR=$(cat .hook_address)
+        # Export HOOK_ADDRESS as environment variable instead of passing as argument
+        export HOOK_ADDRESS="$HOOK_ADDR"
+        just create-pool
+    else
+        echo "Error: Hook address file not found. Make sure deploy-hook completed successfully."
+        exit 1
+    fi
     
     echo ""
     echo "✓ Setup complete!"
