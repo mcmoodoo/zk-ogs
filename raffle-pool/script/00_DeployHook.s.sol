@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {console2} from "forge-std/Script.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
@@ -28,5 +29,10 @@ contract DeployHookScript is BaseScript {
         vm.stopBroadcast();
 
         require(address(hook) == hookAddress, "DeployHookScript: Hook Address Mismatch");
+
+        // Log the deployed hook address for use in subsequent scripts
+        console2.log("Deployed RPSHook at:", address(hook));
+        console2.log("Set HOOK_ADDRESS environment variable to:", address(hook));
+        console2.log("Example: export HOOK_ADDRESS=", address(hook));
     }
 }

@@ -1,0 +1,356 @@
+# Justfile for RPS Hook Deployment and Management
+# Usage: just <command> [arguments]
+
+# Default RPC URL (can be overridden with RPC_URL env var)
+default-rpc-url := "http://localhost:8545"
+
+# Default account name (can be overridden with ACCOUNT env var)
+default-account := "default"
+
+# Default sender address (can be overridden with SENDER env var)
+default-sender := ""
+
+# Hook address storage file
+hook-address-file := ".hook_address"
+
+# ============================================================================
+# Setup & Configuration
+# ============================================================================
+
+# Show available commands
+default:
+    @just --list
+
+# Set hook address from environment or file
+set-hook-address HOOK_ADDRESS:
+    #!/usr/bin/env bash
+    echo "{{HOOK_ADDRESS}}" > {{hook-address-file}}
+    export HOOK_ADDRESS="{{HOOK_ADDRESS}}"
+    echo "Hook address set to: {{HOOK_ADDRESS}}"
+    echo "You can now run: export HOOK_ADDRESS={{HOOK_ADDRESS}}"
+
+# Get hook address from file (if exists)
+get-hook-address:
+    #!/usr/bin/env bash
+    if [ -f {{hook-address-file}} ]; then
+        cat {{hook-address-file}}
+    else
+        echo "No hook address found. Run 'just deploy-hook' first."
+        exit 1
+    fi
+
+# ============================================================================
+# Deployment Commands
+# ============================================================================
+
+# Deploy the RPS Hook contract
+# Usage: just deploy-hook [RPC_URL=http://localhost:8545] [ACCOUNT=default] [SENDER=]
+deploy-hook RPC_URL="{{default-rpc-url}}" ACCOUNT="{{default-account}}" SENDER="{{default-sender}}":
+    #!/usr/bin/env bash
+    set -e
+    
+    RPC_ARG="--rpc-url {{RPC_URL}}"
+    ACCOUNT_ARG=""
+    SENDER_ARG=""
+    
+    if [ -n "{{ACCOUNT}}" ] && [ "{{ACCOUNT}}" != "default" ]; then
+        ACCOUNT_ARG="--account {{ACCOUNT}}"
+    fi
+    
+    if [ -n "{{SENDER}}" ]; then
+        SENDER_ARG="--sender {{SENDER}}"
+    fi
+    
+    echo "Deploying RPS Hook..."
+    forge script script/00_DeployHook.s.sol \
+        $RPC_ARG \
+        $ACCOUNT_ARG \
+        $SENDER_ARG \
+        --broadcast
+    
+    # Extract hook address from output and save it
+    HOOK_ADDR=$(forge script script/00_DeployHook.s.sol $RPC_ARG 2>&1 | grep -oP 'Deployed RPSHook at: \K0x[a-fA-F0-9]{40}' || echo "")
+    
+    if [ -n "$HOOK_ADDR" ]; then
+        echo "$HOOK_ADDR" > {{hook-address-file}}
+        echo ""
+        echo "✓ Hook deployed at: $HOOK_ADDR"
+        echo "✓ Hook address saved to {{hook-address-file}}"
+        echo ""
+        echo "To use in subsequent commands, run:"
+        echo "  export HOOK_ADDRESS=$HOOK_ADDR"
+        echo "Or use: just set-hook-address $HOOK_ADDR"
+    else
+        echo "⚠ Could not extract hook address automatically."
+        echo "Please check the output above and set HOOK_ADDRESS manually."
+    fi
+
+# Deploy V4 artifacts locally (for Anvil)
+deploy-v4 RPC_URL="{{default-rpc-url}}" ACCOUNT="{{default-account}}" SENDER="{{default-sender}}":
+    #!/usr/bin/env bash
+    set -e
+    
+    RPC_ARG="--rpc-url {{RPC_URL}}"
+    ACCOUNT_ARG=""
+    SENDER_ARG=""
+    
+    if [ -n "{{ACCOUNT}}" ] && [ "{{ACCOUNT}}" != "default" ]; then
+        ACCOUNT_ARG="--account {{ACCOUNT}}"
+    fi
+    
+    if [ -n "{{SENDER}}" ]; then
+        SENDER_ARG="--sender {{SENDER}}"
+    fi
+    
+    echo "Deploying V4 artifacts to local network..."
+    forge script script/testing/00_DeployV4.s.sol \
+        $RPC_ARG \
+        $ACCOUNT_ARG \
+        $SENDER_ARG \
+        --broadcast
+
+# ============================================================================
+# Pool Management Commands
+# ============================================================================
+
+# Create a new pool and add initial liquidity
+# Usage: just create-pool [RPC_URL=...] [ACCOUNT=...] [SENDER=...] [HOOK_ADDRESS=]
+create-pool RPC_URL="{{default-rpc-url}}" ACCOUNT="{{default-account}}" SENDER="{{default-sender}}" HOOK_ADDRESS="":
+    #!/usr/bin/env bash
+    set -e
+    
+    # Load hook address from file if not provided
+    if [ -z "{{HOOK_ADDRESS}}" ] && [ -f {{hook-address-file}} ]; then
+        HOOK_ADDRESS=$(cat {{hook-address-file}})
+        echo "Using hook address from file: $HOOK_ADDRESS"
+    elif [ -z "{{HOOK_ADDRESS}}" ]; then
+        echo "Error: HOOK_ADDRESS not set and not found in {{hook-address-file}}"
+        echo "Please set HOOK_ADDRESS environment variable or run 'just deploy-hook' first"
+        exit 1
+    else
+        HOOK_ADDRESS="{{HOOK_ADDRESS}}"
+    fi
+    
+    RPC_ARG="--rpc-url {{RPC_URL}}"
+    ACCOUNT_ARG=""
+    SENDER_ARG=""
+    
+    if [ -n "{{ACCOUNT}}" ] && [ "{{ACCOUNT}}" != "default" ]; then
+        ACCOUNT_ARG="--account {{ACCOUNT}}"
+    fi
+    
+    if [ -n "{{SENDER}}" ]; then
+        SENDER_ARG="--sender {{SENDER}}"
+    fi
+    
+    echo "Creating pool with hook: $HOOK_ADDRESS"
+    HOOK_ADDRESS="$HOOK_ADDRESS" forge script script/01_CreatePoolAndAddLiquidity.s.sol \
+        $RPC_ARG \
+        $ACCOUNT_ARG \
+        $SENDER_ARG \
+        --broadcast
+
+# Add liquidity to an existing pool
+# Usage: just add-liquidity [RPC_URL=...] [ACCOUNT=...] [SENDER=...] [HOOK_ADDRESS=]
+add-liquidity RPC_URL="{{default-rpc-url}}" ACCOUNT="{{default-account}}" SENDER="{{default-sender}}" HOOK_ADDRESS="":
+    #!/usr/bin/env bash
+    set -e
+    
+    # Load hook address from file if not provided
+    if [ -z "{{HOOK_ADDRESS}}" ] && [ -f {{hook-address-file}} ]; then
+        HOOK_ADDRESS=$(cat {{hook-address-file}})
+        echo "Using hook address from file: $HOOK_ADDRESS"
+    elif [ -z "{{HOOK_ADDRESS}}" ]; then
+        echo "Error: HOOK_ADDRESS not set and not found in {{hook-address-file}}"
+        echo "Please set HOOK_ADDRESS environment variable or run 'just deploy-hook' first"
+        exit 1
+    else
+        HOOK_ADDRESS="{{HOOK_ADDRESS}}"
+    fi
+    
+    RPC_ARG="--rpc-url {{RPC_URL}}"
+    ACCOUNT_ARG=""
+    SENDER_ARG=""
+    
+    if [ -n "{{ACCOUNT}}" ] && [ "{{ACCOUNT}}" != "default" ]; then
+        ACCOUNT_ARG="--account {{ACCOUNT}}"
+    fi
+    
+    if [ -n "{{SENDER}}" ]; then
+        SENDER_ARG="--sender {{SENDER}}"
+    fi
+    
+    echo "Adding liquidity to pool with hook: $HOOK_ADDRESS"
+    HOOK_ADDRESS="$HOOK_ADDRESS" forge script script/02_AddLiquidity.s.sol \
+        $RPC_ARG \
+        $ACCOUNT_ARG \
+        $SENDER_ARG \
+        --broadcast
+
+# ============================================================================
+# Swap Commands
+# ============================================================================
+
+# Execute a regular swap
+# Usage: just swap [RPC_URL=...] [ACCOUNT=...] [SENDER=...] [HOOK_ADDRESS=]
+swap RPC_URL="{{default-rpc-url}}" ACCOUNT="{{default-account}}" SENDER="{{default-sender}}" HOOK_ADDRESS="":
+    #!/usr/bin/env bash
+    set -e
+    
+    # Load hook address from file if not provided
+    if [ -z "{{HOOK_ADDRESS}}" ] && [ -f {{hook-address-file}} ]; then
+        HOOK_ADDRESS=$(cat {{hook-address-file}})
+        echo "Using hook address from file: $HOOK_ADDRESS"
+    elif [ -z "{{HOOK_ADDRESS}}" ]; then
+        echo "Error: HOOK_ADDRESS not set and not found in {{hook-address-file}}"
+        echo "Please set HOOK_ADDRESS environment variable or run 'just deploy-hook' first"
+        exit 1
+    else
+        HOOK_ADDRESS="{{HOOK_ADDRESS}}"
+    fi
+    
+    RPC_ARG="--rpc-url {{RPC_URL}}"
+    ACCOUNT_ARG=""
+    SENDER_ARG=""
+    
+    if [ -n "{{ACCOUNT}}" ] && [ "{{ACCOUNT}}" != "default" ]; then
+        ACCOUNT_ARG="--account {{ACCOUNT}}"
+    fi
+    
+    if [ -n "{{SENDER}}" ]; then
+        SENDER_ARG="--sender {{SENDER}}"
+    fi
+    
+    echo "Executing swap with hook: $HOOK_ADDRESS"
+    HOOK_ADDRESS="$HOOK_ADDRESS" forge script script/03_Swap.s.sol \
+        $RPC_ARG \
+        $ACCOUNT_ARG \
+        $SENDER_ARG \
+        --broadcast
+
+# Execute a swap with commitment hash for RPS game
+# Usage: just swap-rps COMMITMENT_HASH [RPC_URL=...] [ACCOUNT=...] [SENDER=...] [HOOK_ADDRESS=]
+swap-rps COMMITMENT_HASH RPC_URL="{{default-rpc-url}}" ACCOUNT="{{default-account}}" SENDER="{{default-sender}}" HOOK_ADDRESS="":
+    #!/usr/bin/env bash
+    set -e
+    
+    if [ -z "{{COMMITMENT_HASH}}" ]; then
+        echo "Error: COMMITMENT_HASH is required"
+        echo "Usage: just swap-rps <COMMITMENT_HASH> [RPC_URL=...] [ACCOUNT=...] [SENDER=...] [HOOK_ADDRESS=]"
+        exit 1
+    fi
+    
+    # Load hook address from file if not provided
+    if [ -z "{{HOOK_ADDRESS}}" ] && [ -f {{hook-address-file}} ]; then
+        HOOK_ADDRESS=$(cat {{hook-address-file}})
+        echo "Using hook address from file: $HOOK_ADDRESS"
+    elif [ -z "{{HOOK_ADDRESS}}" ]; then
+        echo "Error: HOOK_ADDRESS not set and not found in {{hook-address-file}}"
+        echo "Please set HOOK_ADDRESS environment variable or run 'just deploy-hook' first"
+        exit 1
+    else
+        HOOK_ADDRESS="{{HOOK_ADDRESS}}"
+    fi
+    
+    RPC_ARG="--rpc-url {{RPC_URL}}"
+    ACCOUNT_ARG=""
+    SENDER_ARG=""
+    
+    if [ -n "{{ACCOUNT}}" ] && [ "{{ACCOUNT}}" != "default" ]; then
+        ACCOUNT_ARG="--account {{ACCOUNT}}"
+    fi
+    
+    if [ -n "{{SENDER}}" ]; then
+        SENDER_ARG="--sender {{SENDER}}"
+    fi
+    
+    echo "Executing RPS swap with commitment: {{COMMITMENT_HASH}}"
+    echo "Hook address: $HOOK_ADDRESS"
+    HOOK_ADDRESS="$HOOK_ADDRESS" COMMITMENT_HASH="{{COMMITMENT_HASH}}" forge script script/03_Swap.s.sol \
+        $RPC_ARG \
+        $ACCOUNT_ARG \
+        $SENDER_ARG \
+        --broadcast
+
+# ============================================================================
+# Development & Testing Commands
+# ============================================================================
+
+# Run all tests
+test:
+    forge test
+
+# Run tests with verbosity
+test-verbose:
+    forge test -vvv
+
+# Run specific test file
+test-file FILE:
+    forge test --match-path {{FILE}}
+
+# Build the project
+build:
+    forge build
+
+# Clean build artifacts
+clean:
+    forge clean
+
+# Format code
+fmt:
+    forge fmt
+
+# ============================================================================
+# Complete Workflow Commands
+# ============================================================================
+
+# Complete setup: deploy hook, create pool, and add initial liquidity
+# Usage: just setup [RPC_URL=...] [ACCOUNT=...] [SENDER=...]
+setup RPC_URL="{{default-rpc-url}}" ACCOUNT="{{default-account}}" SENDER="{{default-sender}}":
+    #!/usr/bin/env bash
+    set -e
+    
+    echo "=== Step 1: Deploying Hook ==="
+    just deploy-hook RPC_URL={{RPC_URL}} ACCOUNT={{ACCOUNT}} SENDER={{SENDER}}
+    
+    echo ""
+    echo "=== Step 2: Creating Pool and Adding Liquidity ==="
+    HOOK_ADDR=$(cat {{hook-address-file}})
+    just create-pool RPC_URL={{RPC_URL}} ACCOUNT={{ACCOUNT}} SENDER={{SENDER}} HOOK_ADDRESS="$HOOK_ADDR"
+    
+    echo ""
+    echo "✓ Setup complete!"
+    echo "Hook address: $HOOK_ADDR"
+    echo "You can now run swaps with: just swap"
+
+# ============================================================================
+# Utility Commands
+# ============================================================================
+
+# Show current configuration
+status:
+    #!/usr/bin/env bash
+    echo "=== Current Configuration ==="
+    echo ""
+    
+    if [ -f {{hook-address-file}} ]; then
+        HOOK_ADDR=$(cat {{hook-address-file}})
+        echo "Hook Address: $HOOK_ADDR"
+    else
+        echo "Hook Address: Not set"
+    fi
+    
+    echo ""
+    echo "Default RPC URL: {{default-rpc-url}}"
+    echo "Default Account: {{default-account}}"
+    echo ""
+    echo "To override defaults, use environment variables:"
+    echo "  export RPC_URL=<your-rpc-url>"
+    echo "  export ACCOUNT=<your-account-name>"
+    echo "  export SENDER=<your-sender-address>"
+    echo "  export HOOK_ADDRESS=<hook-address>"
+
+# Clear saved hook address
+clear-hook:
+    rm -f {{hook-address-file}}
+    echo "Cleared saved hook address"

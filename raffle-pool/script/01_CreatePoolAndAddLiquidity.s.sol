@@ -30,6 +30,13 @@ contract CreatePoolAndAddLiquidityScript is BaseScript, LiquidityHelpers {
     /////////////////////////////////////
 
     function run() external {
+        // Note: If creating a pool with RPSHook, set HOOK_ADDRESS env var before running
+        // If hookContract is address(0), the pool will be created without a hook
+        require(
+            address(hookContract) != address(0) || vm.envOr("ALLOW_NO_HOOK", false),
+            "Hook contract not set. Set HOOK_ADDRESS env var, or set ALLOW_NO_HOOK=true to create pool without hook."
+        );
+
         PoolKey memory poolKey = PoolKey({
             currency0: currency0,
             currency1: currency1,

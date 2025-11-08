@@ -32,6 +32,14 @@ contract AddLiquidityScript is BaseScript, LiquidityHelpers {
     int24 tickUpper;
 
     function run() external {
+        // Note: hookContract must match the hook used when the pool was created
+        // Set HOOK_ADDRESS env var to match the existing pool's hook
+        // If the pool was created without a hook, set HOOK_ADDRESS=0x0000000000000000000000000000000000000000
+        require(
+            address(hookContract) != address(0) || vm.envOr("ALLOW_NO_HOOK", false),
+            "Hook contract not set. Set HOOK_ADDRESS env var to match the pool's hook (or 0x0 if pool has no hook)."
+        );
+
         PoolKey memory poolKey = PoolKey({
             currency0: currency0,
             currency1: currency1,

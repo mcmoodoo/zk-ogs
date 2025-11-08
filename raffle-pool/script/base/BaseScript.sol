@@ -24,7 +24,8 @@ contract BaseScript is Script, Deployers {
     /////////////////////////////////////
     IERC20 internal constant token0 = IERC20(0x0165878A594ca255338adfa4d48449f69242Eb8F);
     IERC20 internal constant token1 = IERC20(0xa513E6E4b8f2a923D98304ec87F64353C4D5C853);
-    IHooks constant hookContract = IHooks(address(0));
+    // Hook contract address - can be set via HOOK_ADDRESS env var, or will be address(0) if not set
+    IHooks immutable hookContract;
     /////////////////////////////////////
 
     Currency immutable currency0;
@@ -35,6 +36,10 @@ contract BaseScript is Script, Deployers {
         deployArtifacts();
 
         deployerAddress = getDeployer();
+
+        // Get hook address from environment variable, or use address(0) if not set
+        address hookAddress = vm.envOr("HOOK_ADDRESS", address(0));
+        hookContract = IHooks(hookAddress);
 
         (currency0, currency1) = getCurrencies();
 
