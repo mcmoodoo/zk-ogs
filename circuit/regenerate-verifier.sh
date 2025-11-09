@@ -15,8 +15,3 @@ echo ""
 echo "Next steps:"
 echo "1. Check the contract size: cd ../contracts && npx hardhat compile"
 echo "2. If size is acceptable, deploy with: npx hardhat ignition deploy ignition/modules/RockPaperScissors.ts --network localhost"
-
-
-
-
-
