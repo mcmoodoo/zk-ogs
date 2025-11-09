@@ -1,6 +1,9 @@
-// Local storage utilities for storing game commitments
+// Local storage utilities for storing Player 1's move and salt secrets
+// These are needed for the commit-reveal scheme: Player 1 commits a hash on-chain,
+// but must store the original move + salt locally to reveal later.
+// Games themselves are stored on-chain - this only stores the secret information.
 
-const STORAGE_PREFIX = 'rps_game_';
+const STORAGE_PREFIX = 'rps_game_secret_';
 
 export interface GameCommitment {
   commitmentHash: string;

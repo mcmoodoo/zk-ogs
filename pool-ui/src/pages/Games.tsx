@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAccount } from 'wagmi';
 import { Routes, Route, useParams, Link } from 'react-router-dom';
-import { usePendingSwap } from '../hooks/useRPSHook';
+import { usePendingSwap, useAllActiveGames } from '../hooks/useRPSHook';
 import { getAllCommitments, getCommitment, removeCommitment } from '../lib/storage';
 import GameCard from '../components/Game/GameCard';
 import GameDetail from '../components/Game/GameDetail';
@@ -26,10 +26,19 @@ function ValidatedGameCard({
     gameData.player1 !== '0x0000000000000000000000000000000000000000' && 
     gameData.timestamp > 0n;
 
+  const prevValidationRef = useRef<{ hash: string; isValid: boolean } | null>(null);
+  
   useEffect(() => {
-    if (!isLoading) {
+    if (!isLoading && onValidation) {
       const isValid = gameExists && !error;
-      onValidation?.(commitmentHash, isValid);
+      // Only call onValidation if the result has changed
+      const current = { hash: commitmentHash, isValid };
+      if (!prevValidationRef.current || 
+          prevValidationRef.current.hash !== current.hash || 
+          prevValidationRef.current.isValid !== current.isValid) {
+        prevValidationRef.current = current;
+        onValidation(commitmentHash, isValid);
+      }
     }
   }, [isLoading, gameExists, error, commitmentHash, onValidation]);
 
@@ -79,23 +88,27 @@ function GamesList() {
 
   const [validatedHashes, setValidatedHashes] = useState<Set<string>>(new Set());
 
+  // Query all active games from the contract (this is the source of truth)
+  const { data: activeGamesFromContract, isLoading: isLoadingActiveGames } = useAllActiveGames();
+
   useEffect(() => {
-    // Load all commitments from localStorage
-    const storedCommitments = getAllCommitments();
-    setCommitments(storedCommitments.map((c) => c.commitmentHash));
+    // Use games from the contract as the primary source
+    // localStorage only stores move/salt secrets for Player 1 to reveal later
+    const contractHashes = activeGamesFromContract || [];
+    setCommitments(contractHashes);
     setValidCommitments(new Set());
     setValidatedHashes(new Set());
     setValidationComplete(false);
-  }, []);
+  }, [activeGamesFromContract]);
 
-  const handleValidation = (hash: string, isValid: boolean) => {
+  const handleValidation = useCallback((hash: string, isValid: boolean) => {
     setValidatedHashes((prev) => {
+      // Only update if this hash hasn't been validated yet
+      if (prev.has(hash)) {
+        return prev;
+      }
       const next = new Set(prev);
       next.add(hash);
-      // Mark validation as complete when we've checked all commitments
-      if (next.size >= commitments.length) {
-        setValidationComplete(true);
-      }
       return next;
     });
     
@@ -108,22 +121,38 @@ function GamesList() {
       }
       return next;
     });
-  };
+  }, []);
+  
+  // Check if validation is complete separately
+  useEffect(() => {
+    if (commitments.length > 0 && validatedHashes.size >= commitments.length) {
+      setValidationComplete(true);
+    }
+  }, [commitments.length, validatedHashes.size]);
 
   // Filter out invalid commitments (those that don't exist on-chain)
   // We'll validate them as we render, but also provide a way to clean up
   const handleClearInvalid = () => {
-    // Clear all localStorage commitments (development helper)
-    if (confirm('Clear all stored game commitments? This will remove games from localStorage.')) {
+    // Clear all localStorage secrets (development helper)
+    // Note: This only clears the move/salt secrets, not the games themselves (which are on-chain)
+    if (confirm('Clear all stored move/salt secrets from localStorage? Games will still exist on-chain, but you won\'t be able to reveal moves without the secrets.')) {
       commitments.forEach((hash) => {
         removeCommitment(hash);
       });
-      setCommitments([]);
+      // Don't clear commitments - they come from the contract
       setValidCommitments(new Set());
       setValidatedHashes(new Set());
       setValidationComplete(false);
     }
   };
+
+  if (isLoadingActiveGames) {
+    return (
+      <div className="text-center py-12">
+        <div className="text-slate-400 mb-4">Loading games...</div>
+      </div>
+    );
+  }
 
   if (commitments.length === 0) {
     return (
@@ -147,9 +176,9 @@ function GamesList() {
           <button
             onClick={handleClearInvalid}
             className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-md transition-colors text-sm"
-            title="Clear localStorage (useful after Anvil restart)"
+            title="Clear move/salt secrets from localStorage (games remain on-chain)"
           >
-            Clear Stored Games
+            Clear Secrets
           </button>
           <Link
             to="/swap"
@@ -164,18 +193,24 @@ function GamesList() {
       {commitments.length > 0 && (
         <div className="mb-4 p-3 bg-slate-900 border border-slate-700 rounded-lg text-sm">
           <div className="text-slate-400 mb-2">
+            Active Games: {commitments.length} (from contract)
+            {getAllCommitments().length > 0 && ` • ${getAllCommitments().length} with stored secrets (move/salt)`}
+            <br />
             Validation Status: {validatedHashes.size} / {commitments.length} checked
             {validationComplete && ` • ${validCommitments.size} valid on-chain`}
           </div>
           {commitments.length > 0 && (
             <div className="text-xs text-slate-500 space-y-1">
-              {commitments.map((hash) => (
-                <div key={hash}>
-                  {hash.slice(0, 10)}...: {validatedHashes.has(hash) 
-                    ? (validCommitments.has(hash) ? '✓ Valid' : '✗ Not on-chain')
-                    : '⏳ Checking...'}
-                </div>
-              ))}
+              {commitments.map((hash) => {
+                const hasSecret = getCommitment(hash) !== null;
+                return (
+                  <div key={hash}>
+                    {hash.slice(0, 10)}...: {validatedHashes.has(hash) 
+                      ? (validCommitments.has(hash) ? `✓ Valid${hasSecret ? ' (has secret)' : ''}` : '✗ Not on-chain')
+                      : '⏳ Checking...'}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -195,10 +230,10 @@ function GamesList() {
       {validationComplete && commitments.length > 0 && validCommitments.size === 0 && (
         <div className="text-center py-8 bg-yellow-500/20 border border-yellow-500 rounded-lg">
           <p className="text-yellow-400 mb-2">
-            No games found on-chain. This might happen after restarting Anvil.
+            Games found on-chain but validation failed. This might indicate a connection issue.
           </p>
           <p className="text-sm text-slate-400 mb-4">
-            Click "Clear Stored Games" to remove games from localStorage.
+            Games are stored on-chain. localStorage only stores move/salt secrets for revealing.
           </p>
         </div>
       )}

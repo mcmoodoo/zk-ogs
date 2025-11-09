@@ -143,3 +143,25 @@ export function useClaimPrize() {
     error,
   };
 }
+
+export function useAllActiveGames() {
+  return useReadContract({
+    address: hookAddress,
+    abi: hookAbi,
+    functionName: 'getAllActiveGames',
+    query: {
+      refetchInterval: 5000, // Poll every 5 seconds
+    },
+  });
+}
+
+export function useGamesWaitingForPlayer2() {
+  return useReadContract({
+    address: hookAddress,
+    abi: hookAbi,
+    functionName: 'getGamesWaitingForPlayer2',
+    query: {
+      refetchInterval: 5000, // Poll every 5 seconds
+    },
+  });
+}

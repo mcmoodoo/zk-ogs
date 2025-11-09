@@ -738,7 +738,7 @@
       "blockNumber": 3
     },
     "hook": {
-      "address": "0x8215e0f20fe84407514f677f649b47d226e80ac4",
+      "address": "0x2bab0c009013e9113992d8951be0ecb4a26a4ac4",
       "abi": [
         {
           "type": "constructor",
@@ -838,6 +838,44 @@
               "name": "",
               "type": "uint8",
               "internalType": "uint8"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "activeGameIndex",
+          "inputs": [
+            {
+              "name": "",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "activeGames",
+          "inputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "bytes32",
+              "internalType": "bytes32"
             }
           ],
           "stateMutability": "view"
@@ -1697,6 +1735,51 @@
         },
         {
           "type": "function",
+          "name": "getActiveGameAtIndex",
+          "inputs": [
+            {
+              "name": "index",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "getActiveGamesCount",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "getAllActiveGames",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "bytes32[]",
+              "internalType": "bytes32[]"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
           "name": "getContributionByAddress",
           "inputs": [
             {
@@ -1720,6 +1803,32 @@
               "name": "",
               "type": "uint256",
               "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "getGamesWaitingForPlayer2",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "bytes32[]",
+              "internalType": "bytes32[]"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "getGamesWaitingForReveal",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "bytes32[]",
+              "internalType": "bytes32[]"
             }
           ],
           "stateMutability": "view"
@@ -2144,6 +2253,80 @@
         },
         {
           "type": "event",
+          "name": "DebugHookData",
+          "inputs": [
+            {
+              "name": "length",
+              "type": "uint256",
+              "indexed": false,
+              "internalType": "uint256"
+            },
+            {
+              "name": "decodedSender",
+              "type": "address",
+              "indexed": false,
+              "internalType": "address"
+            },
+            {
+              "name": "decodedCommitment",
+              "type": "bytes32",
+              "indexed": false,
+              "internalType": "bytes32"
+            },
+            {
+              "name": "fallbackSender",
+              "type": "address",
+              "indexed": false,
+              "internalType": "address"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
+          "name": "GameCreated",
+          "inputs": [
+            {
+              "name": "commitmentHash",
+              "type": "bytes32",
+              "indexed": true,
+              "internalType": "bytes32"
+            },
+            {
+              "name": "player1",
+              "type": "address",
+              "indexed": true,
+              "internalType": "address"
+            },
+            {
+              "name": "poolId",
+              "type": "bytes32",
+              "indexed": true,
+              "internalType": "PoolId"
+            },
+            {
+              "name": "currency",
+              "type": "address",
+              "indexed": false,
+              "internalType": "Currency"
+            },
+            {
+              "name": "contributionAmount",
+              "type": "uint256",
+              "indexed": false,
+              "internalType": "uint256"
+            },
+            {
+              "name": "timestamp",
+              "type": "uint256",
+              "indexed": false,
+              "internalType": "uint256"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
           "name": "GameResolved",
           "inputs": [
             {
@@ -2319,6 +2502,197 @@
         }
       ],
       "blockNumber": 6
+    },
+    "senderRelayRouter": {
+      "address": "0x610178da211fef7d417bc0e6fed39f05609ad788",
+      "abi": [
+        {
+          "type": "constructor",
+          "inputs": [
+            {
+              "name": "_router",
+              "type": "address",
+              "internalType": "contract IUniswapV4Router04"
+            }
+          ],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "receive",
+          "stateMutability": "payable"
+        },
+        {
+          "type": "function",
+          "name": "router",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "contract IUniswapV4Router04"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "swapExactTokensForTokens",
+          "inputs": [
+            {
+              "name": "amountIn",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "amountOutMin",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "zeroForOne",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "poolKey",
+              "type": "tuple",
+              "internalType": "struct PoolKey",
+              "components": [
+                {
+                  "name": "currency0",
+                  "type": "address",
+                  "internalType": "Currency"
+                },
+                {
+                  "name": "currency1",
+                  "type": "address",
+                  "internalType": "Currency"
+                },
+                {
+                  "name": "fee",
+                  "type": "uint24",
+                  "internalType": "uint24"
+                },
+                {
+                  "name": "tickSpacing",
+                  "type": "int24",
+                  "internalType": "int24"
+                },
+                {
+                  "name": "hooks",
+                  "type": "address",
+                  "internalType": "contract IHooks"
+                }
+              ]
+            },
+            {
+              "name": "hookData",
+              "type": "bytes",
+              "internalType": "bytes"
+            },
+            {
+              "name": "receiver",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "deadline",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "delta",
+              "type": "int256",
+              "internalType": "BalanceDelta"
+            }
+          ],
+          "stateMutability": "payable"
+        },
+        {
+          "type": "function",
+          "name": "swapExactTokensForTokensWithCommitment",
+          "inputs": [
+            {
+              "name": "amountIn",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "amountOutMin",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "zeroForOne",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "poolKey",
+              "type": "tuple",
+              "internalType": "struct PoolKey",
+              "components": [
+                {
+                  "name": "currency0",
+                  "type": "address",
+                  "internalType": "Currency"
+                },
+                {
+                  "name": "currency1",
+                  "type": "address",
+                  "internalType": "Currency"
+                },
+                {
+                  "name": "fee",
+                  "type": "uint24",
+                  "internalType": "uint24"
+                },
+                {
+                  "name": "tickSpacing",
+                  "type": "int24",
+                  "internalType": "int24"
+                },
+                {
+                  "name": "hooks",
+                  "type": "address",
+                  "internalType": "contract IHooks"
+                }
+              ]
+            },
+            {
+              "name": "commitmentHash",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "hookData",
+              "type": "bytes",
+              "internalType": "bytes"
+            },
+            {
+              "name": "receiver",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "deadline",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "delta",
+              "type": "int256",
+              "internalType": "BalanceDelta"
+            }
+          ],
+          "stateMutability": "payable"
+        }
+      ],
+      "blockNumber": 7
     }
   }
 }

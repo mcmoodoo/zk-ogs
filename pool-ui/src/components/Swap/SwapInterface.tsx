@@ -8,7 +8,7 @@ import { generateCommitmentHash, generateSalt, parseAmount, formatAmount } from 
 import { saveCommitment } from '../../lib/storage';
 import MoveSelector from './MoveSelector';
 import toast from 'react-hot-toast';
-import { Address } from 'viem';
+import { Address, maxUint256 } from 'viem';
 
 export default function SwapInterface() {
   const { address } = useAccount();
@@ -19,7 +19,8 @@ export default function SwapInterface() {
 
   const token0Address = config.contracts.token0.address as Address;
   const token1Address = config.contracts.token1.address as Address;
-  const routerAddress = config.contracts.router.address as Address;
+  // Use SenderRelayRouter if available, otherwise fall back to base router
+  const routerAddress = (config.contracts.senderRelayRouter?.address || config.contracts.router.address) as Address;
 
   const inputToken = zeroForOne ? token0Address : token1Address;
   const outputToken = zeroForOne ? token1Address : token0Address;
@@ -34,8 +35,8 @@ export default function SwapInterface() {
   const { data: inputSymbol } = useTokenSymbol(inputToken);
   const { data: outputSymbol } = useTokenSymbol(outputToken);
   const { data: allowance, refetch: refetchAllowance } = useTokenAllowance(inputToken, address, routerAddress);
-  const { approve, isPending: isApproving, isSuccess: isApprovalSuccess } = useApproveToken();
-  const { swap, isPending: isSwapping, isLoading: isConfirming, isSuccess, hash } = useSwapWithCommitment();
+  const { approve, isPending: isApproving, isSuccess: isApprovalSuccess, error: approvalError } = useApproveToken();
+  const { swap, isPending: isSwapping, isLoading: isConfirming, isSuccess, hash, error: swapError } = useSwapWithCommitment();
   
   // Track if a swap transaction is in progress (pending or confirming)
   const isSwapInProgress = isSwapping || isConfirming || !!hash;
@@ -43,7 +44,7 @@ export default function SwapInterface() {
   // Refetch allowance when approval succeeds
   useEffect(() => {
     if (isApprovalSuccess) {
-      toast.success('Approval successful!');
+      toast.success('Approval successful! Unlimited allowance granted.');
       // Invalidate and refetch allowance after a short delay to allow blockchain to update
       setTimeout(() => {
         queryClient.invalidateQueries();
@@ -52,7 +53,42 @@ export default function SwapInterface() {
     }
   }, [isApprovalSuccess, queryClient, refetchAllowance]);
 
-  const needsApproval = amount && allowance !== undefined && parseAmount(amount) > allowance;
+  // Show swap errors
+  useEffect(() => {
+    if (swapError) {
+      console.error('Swap transaction error:', swapError);
+      toast.error(`Swap failed: ${swapError.message || 'Unknown error'}`);
+    }
+  }, [swapError]);
+
+  // Show approval errors
+  useEffect(() => {
+    if (approvalError) {
+      console.error('Approval error:', approvalError);
+      const errorMessage = approvalError instanceof Error 
+        ? approvalError.message 
+        : 'Approval failed. Please try again.';
+      toast.error(`Approval failed: ${errorMessage}`);
+    }
+  }, [approvalError]);
+
+  // Check if approval is needed
+  // We need approval if:
+  // 1. Allowance is loaded (not undefined)
+  // 2. We don't have unlimited allowance (allowance < 90% of maxUint256)
+  // 3. Either no amount is entered yet, or allowance is less than amount needed
+  // Note: We use a large threshold (90% of maxUint256) to consider it "unlimited"
+  const UNLIMITED_THRESHOLD = maxUint256 / 10n * 9n; // 90% of maxUint256
+  const hasUnlimitedAllowance = allowance !== undefined && allowance >= UNLIMITED_THRESHOLD;
+  const amountNeeded = amount ? parseAmount(amount) : 0n;
+  
+  // Only show approval button if:
+  // - Allowance is loaded
+  // - We don't have unlimited allowance
+  // - Either no amount entered, or current allowance is insufficient
+  const needsApproval = allowance !== undefined && 
+    !hasUnlimitedAllowance && 
+    (amountNeeded === 0n || allowance < amountNeeded);
 
   const handleSwap = async () => {
     // Prevent double-submission
@@ -67,11 +103,12 @@ export default function SwapInterface() {
     }
 
     try {
-      // Generate commitment
+      // Generate commitment hash for commit-reveal scheme
       const salt = generateSalt();
       const commitmentHash = generateCommitmentHash(selectedMove, salt);
       
-      // Save to localStorage
+      // Save move + salt to localStorage (needed for Player 1 to reveal later)
+      // The commitment hash goes on-chain, but we need the original move/salt to reveal
       saveCommitment(commitmentHash, selectedMove, salt);
 
       // Parse amount
@@ -80,18 +117,29 @@ export default function SwapInterface() {
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * 20); // 20 minutes
 
       // Execute swap
+      console.log('Initiating swap with commitment:', {
+        commitmentHash,
+        amountIn: amountIn.toString(),
+        routerAddress,
+      });
+      
       swap(amountIn, amountOutMin, zeroForOne, commitmentHash, address, deadline);
       
       toast.success('Swap initiated! Check your games page.');
     } catch (error: any) {
+      console.error('Swap initiation error:', error);
       toast.error(error.message || 'Swap failed');
     }
   };
 
-  const handleApprove = () => {
-    if (!amount) return;
-    const amountIn = parseAmount(amount);
-    approve(inputToken, routerAddress, amountIn);
+  const handleApprove = async () => {
+    try {
+      // Approve with unlimited allowance (no amount parameter = maxUint256)
+      approve(inputToken, routerAddress);
+    } catch (error: any) {
+      console.error('Approval error:', error);
+      toast.error(`Approval failed: ${error?.message || 'Unknown error'}`);
+    }
   };
 
   return (
@@ -133,11 +181,18 @@ export default function SwapInterface() {
               Max
             </button>
           </div>
-          {inputBalance && (
-            <div className="text-sm text-slate-400">
-              Balance: {formatAmount(inputBalance)} {inputSymbol}
-            </div>
-          )}
+          <div className="flex items-center justify-between text-sm">
+            {inputBalance && (
+              <div className="text-slate-400">
+                Balance: {formatAmount(inputBalance)} {inputSymbol}
+              </div>
+            )}
+            {allowance !== undefined && (
+              <div className={`text-xs ${hasUnlimitedAllowance ? 'text-green-400' : 'text-slate-500'}`}>
+                {hasUnlimitedAllowance ? '✓ Unlimited allowance' : `Allowance: ${formatAmount(allowance)}`}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Move Selector */}
@@ -147,14 +202,25 @@ export default function SwapInterface() {
           disabled={isSwapInProgress || isApproving}
         />
 
+        {/* Approval Error Display */}
+        {approvalError && (
+          <div className="p-4 bg-red-500/20 border border-red-500 rounded-md text-red-400 text-sm">
+            <div className="font-semibold mb-1">Approval Error:</div>
+            <div>{approvalError instanceof Error ? approvalError.message : String(approvalError)}</div>
+            <div className="mt-2 text-xs text-red-300">
+              Tip: Make sure you're connected to the correct network and have sufficient gas.
+            </div>
+          </div>
+        )}
+
         {/* Action Button */}
         {needsApproval ? (
           <button
             onClick={handleApprove}
-            disabled={isApproving || !amount}
+            disabled={isApproving}
             className="w-full py-3 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md font-medium transition-colors"
           >
-            {isApproving ? 'Approving...' : `Approve ${inputSymbol}`}
+            {isApproving ? 'Approving...' : `Approve ${inputSymbol} (Unlimited)`}
           </button>
         ) : (
           <button

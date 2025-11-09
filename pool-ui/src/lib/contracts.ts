@@ -10,6 +10,7 @@ export interface DeploymentConfig {
     poolManager: { address: string; abi: any[] };
     positionManager: { address: string; abi: any[] };
     router: { address: string; abi: any[] };
+    senderRelayRouter?: { address: string; abi: any[] };
     hook: { address: string; abi: any[] };
   };
 }

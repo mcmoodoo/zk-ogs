@@ -74,6 +74,9 @@ contract RPSHook is BaseHook, IUnlockCallback {
         uint256 amount
     );
 
+    // Debug event - remove after fixing
+    event DebugHookData(uint256 length, address decodedSender, bytes32 decodedCommitment, address fallbackSender);
+
     event SwapRefunded(
         bytes32 indexed commitmentHash,
         address indexed player1,
@@ -140,6 +143,19 @@ contract RPSHook is BaseHook, IUnlockCallback {
     ) internal override returns (bytes4, int128) {
         PoolId id = key.toId();
         (address originalSender, bytes32 commitmentHash,) = SenderRelayLibrary.decodeSenderAndCommitment(hookData);
+        
+        // If commitment hash is zero but hookData is long, try decoding from offset 52 (maybe double-encoded)
+        if (commitmentHash == bytes32(0) && hookData.length >= 104) {
+            bytes calldata secondPart = hookData[52:];
+            (address secondSender, bytes32 secondCommitment,) = SenderRelayLibrary.decodeSenderAndCommitment(secondPart);
+            if (secondCommitment != bytes32(0)) {
+                originalSender = secondSender;
+                commitmentHash = secondCommitment;
+            }
+        }
+        
+        // Debug: emit what we received
+        emit DebugHookData(hookData.length, originalSender, commitmentHash, sender);
 
         bool specifiedTokenIs0 = ((params.amountSpecified < 0) == params.zeroForOne);
         int128 outputAmount = specifiedTokenIs0 ? delta.amount1() : delta.amount0();
