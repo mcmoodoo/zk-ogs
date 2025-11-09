@@ -847,3 +847,266 @@ status:
 clear-addresses:
     rm -f {{deployments-file}}
     echo "Cleared all saved addresses"
+
+# Fund an address with 10 ETH
+# Usage: just fund [ADDRESS=0x2f04d60991191005103d73bdcf12187a824d42a4] [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...]
+fund ADDRESS="0x2f04d60991191005103d73bdcf12187a824d42a4" RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80":
+    #!/usr/bin/env bash
+    set -e
+    
+    # Extract and clean parameters
+    ADDR_VAL="{{ADDRESS}}"
+    RPC_VAL="{{RPC_URL}}"
+    PK_VAL="{{PRIVATE_KEY}}"
+    
+    # Strip parameter name prefix if present
+    case "$ADDR_VAL" in
+        ADDRESS=*)
+            ADDR_VAL="${ADDR_VAL#ADDRESS=}"
+            ;;
+    esac
+    case "$RPC_VAL" in
+        RPC_URL=*)
+            RPC_VAL="${RPC_VAL#RPC_URL=}"
+            ;;
+    esac
+    case "$PK_VAL" in
+        PRIVATE_KEY=*)
+            PK_VAL="${PK_VAL#PRIVATE_KEY=}"
+            ;;
+    esac
+    
+    # Remove quotes and trim
+    ADDR_VAL=$(echo "$ADDR_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    RPC_VAL=$(echo "$RPC_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    PK_VAL=$(echo "$PK_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    
+    # Validate address format
+    if [ -z "$ADDR_VAL" ] || [ "${#ADDR_VAL}" -ne 42 ] || [ "${ADDR_VAL:0:2}" != "0x" ]; then
+        echo "Error: Invalid address format. Expected 42 characters starting with 0x"
+        echo "Got: [$ADDR_VAL] (length: ${#ADDR_VAL})"
+        exit 1
+    fi
+    
+    # Validate private key format
+    if [ -z "$PK_VAL" ] || [ "${#PK_VAL}" -ne 66 ] || [ "${PK_VAL:0:2}" != "0x" ]; then
+        echo "Error: Invalid private key format. Expected 66 characters starting with 0x"
+        echo "Got: [$PK_VAL] (length: ${#PK_VAL})"
+        exit 1
+    fi
+    
+    echo "Funding address $ADDR_VAL with 10 ETH..."
+    cast send "$ADDR_VAL" \
+        --value 10ether \
+        --private-key "$PK_VAL" \
+        --rpc-url "$RPC_VAL"
+    
+    echo ""
+    echo "✓ Successfully sent 10 ETH to $ADDR_VAL"
+
+# Mint 1000 token0 to an address
+# Usage: just mint-token0 [ADDRESS=0x2f04d60991191005103d73bdcf12187a824d42a4] [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...]
+mint-token0 ADDRESS="0x2f04d60991191005103d73bdcf12187a824d42a4" RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80":
+    #!/usr/bin/env bash
+    set -e
+    
+    # Extract and clean parameters
+    ADDR_VAL="{{ADDRESS}}"
+    RPC_VAL="{{RPC_URL}}"
+    PK_VAL="{{PRIVATE_KEY}}"
+    
+    # Strip parameter name prefix if present
+    case "$ADDR_VAL" in
+        ADDRESS=*)
+            ADDR_VAL="${ADDR_VAL#ADDRESS=}"
+            ;;
+    esac
+    case "$RPC_VAL" in
+        RPC_URL=*)
+            RPC_VAL="${RPC_VAL#RPC_URL=}"
+            ;;
+    esac
+    case "$PK_VAL" in
+        PRIVATE_KEY=*)
+            PK_VAL="${PK_VAL#PRIVATE_KEY=}"
+            ;;
+    esac
+    
+    # Remove quotes and trim
+    ADDR_VAL=$(echo "$ADDR_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    RPC_VAL=$(echo "$RPC_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    PK_VAL=$(echo "$PK_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    
+    # Validate address format
+    if [ -z "$ADDR_VAL" ] || [ "${#ADDR_VAL}" -ne 42 ] || [ "${ADDR_VAL:0:2}" != "0x" ]; then
+        echo "Error: Invalid address format. Expected 42 characters starting with 0x"
+        echo "Got: [$ADDR_VAL] (length: ${#ADDR_VAL})"
+        exit 1
+    fi
+    
+    # Validate private key format
+    if [ -z "$PK_VAL" ] || [ "${#PK_VAL}" -ne 66 ] || [ "${PK_VAL:0:2}" != "0x" ]; then
+        echo "Error: Invalid private key format. Expected 66 characters starting with 0x"
+        echo "Got: [$PK_VAL] (length: ${#PK_VAL})"
+        exit 1
+    fi
+    
+    # Get token0 address from deployments.json
+    TOKEN0=$(just _get-address token0)
+    if [ -z "$TOKEN0" ]; then
+        echo "Error: token0 address not found in {{deployments-file}}"
+        echo "Please run 'just deploy-tokens' first"
+        exit 1
+    fi
+    
+    echo "Minting 1000 token0 to $ADDR_VAL..."
+    cast send "$TOKEN0" \
+        "mint(address,uint256)" "$ADDR_VAL" "1000e18" \
+        --private-key "$PK_VAL" \
+        --rpc-url "$RPC_VAL"
+    
+    echo ""
+    echo "✓ Successfully minted 1000 token0 to $ADDR_VAL"
+
+# Mint 1000 token1 to an address
+# Usage: just mint-token1 [ADDRESS=0x2f04d60991191005103d73bdcf12187a824d42a4] [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...]
+mint-token1 ADDRESS="0x2f04d60991191005103d73bdcf12187a824d42a4" RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80":
+    #!/usr/bin/env bash
+    set -e
+    
+    # Extract and clean parameters
+    ADDR_VAL="{{ADDRESS}}"
+    RPC_VAL="{{RPC_URL}}"
+    PK_VAL="{{PRIVATE_KEY}}"
+    
+    # Strip parameter name prefix if present
+    case "$ADDR_VAL" in
+        ADDRESS=*)
+            ADDR_VAL="${ADDR_VAL#ADDRESS=}"
+            ;;
+    esac
+    case "$RPC_VAL" in
+        RPC_URL=*)
+            RPC_VAL="${RPC_VAL#RPC_URL=}"
+            ;;
+    esac
+    case "$PK_VAL" in
+        PRIVATE_KEY=*)
+            PK_VAL="${PK_VAL#PRIVATE_KEY=}"
+            ;;
+    esac
+    
+    # Remove quotes and trim
+    ADDR_VAL=$(echo "$ADDR_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    RPC_VAL=$(echo "$RPC_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    PK_VAL=$(echo "$PK_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    
+    # Validate address format
+    if [ -z "$ADDR_VAL" ] || [ "${#ADDR_VAL}" -ne 42 ] || [ "${ADDR_VAL:0:2}" != "0x" ]; then
+        echo "Error: Invalid address format. Expected 42 characters starting with 0x"
+        echo "Got: [$ADDR_VAL] (length: ${#ADDR_VAL})"
+        exit 1
+    fi
+    
+    # Validate private key format
+    if [ -z "$PK_VAL" ] || [ "${#PK_VAL}" -ne 66 ] || [ "${PK_VAL:0:2}" != "0x" ]; then
+        echo "Error: Invalid private key format. Expected 66 characters starting with 0x"
+        echo "Got: [$PK_VAL] (length: ${#PK_VAL})"
+        exit 1
+    fi
+    
+    # Get token1 address from deployments.json
+    TOKEN1=$(just _get-address token1)
+    if [ -z "$TOKEN1" ]; then
+        echo "Error: token1 address not found in {{deployments-file}}"
+        echo "Please run 'just deploy-tokens' first"
+        exit 1
+    fi
+    
+    echo "Minting 1000 token1 to $ADDR_VAL..."
+    cast send "$TOKEN1" \
+        "mint(address,uint256)" "$ADDR_VAL" "1000e18" \
+        --private-key "$PK_VAL" \
+        --rpc-url "$RPC_VAL"
+    
+    echo ""
+    echo "✓ Successfully minted 1000 token1 to $ADDR_VAL"
+
+# Mint 1000 of each token (token0 and token1) to an address
+# Usage: just mint-tokens [ADDRESS=0x2f04d60991191005103d73bdcf12187a824d42a4] [RPC_URL=http://localhost:8545] [PRIVATE_KEY=0x...]
+mint-tokens ADDRESS="0x2f04d60991191005103d73bdcf12187a824d42a4" RPC_URL="http://localhost:8545" PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80":
+    #!/usr/bin/env bash
+    set -e
+    
+    # Extract and clean parameters
+    ADDR_VAL="{{ADDRESS}}"
+    RPC_VAL="{{RPC_URL}}"
+    PK_VAL="{{PRIVATE_KEY}}"
+    
+    # Strip parameter name prefix if present
+    case "$ADDR_VAL" in
+        ADDRESS=*)
+            ADDR_VAL="${ADDR_VAL#ADDRESS=}"
+            ;;
+    esac
+    case "$RPC_VAL" in
+        RPC_URL=*)
+            RPC_VAL="${RPC_VAL#RPC_URL=}"
+            ;;
+    esac
+    case "$PK_VAL" in
+        PRIVATE_KEY=*)
+            PK_VAL="${PK_VAL#PRIVATE_KEY=}"
+            ;;
+    esac
+    
+    # Remove quotes and trim
+    ADDR_VAL=$(echo "$ADDR_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    RPC_VAL=$(echo "$RPC_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    PK_VAL=$(echo "$PK_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    
+    # Validate address format
+    if [ -z "$ADDR_VAL" ] || [ "${#ADDR_VAL}" -ne 42 ] || [ "${ADDR_VAL:0:2}" != "0x" ]; then
+        echo "Error: Invalid address format. Expected 42 characters starting with 0x"
+        echo "Got: [$ADDR_VAL] (length: ${#ADDR_VAL})"
+        exit 1
+    fi
+    
+    # Validate private key format
+    if [ -z "$PK_VAL" ] || [ "${#PK_VAL}" -ne 66 ] || [ "${PK_VAL:0:2}" != "0x" ]; then
+        echo "Error: Invalid private key format. Expected 66 characters starting with 0x"
+        echo "Got: [$PK_VAL] (length: ${#PK_VAL})"
+        exit 1
+    fi
+    
+    # Get token addresses from deployments.json
+    TOKEN0=$(just _get-address token0)
+    TOKEN1=$(just _get-address token1)
+    
+    if [ -z "$TOKEN0" ]; then
+        echo "Error: token0 address not found in {{deployments-file}}"
+        echo "Please run 'just deploy-tokens' first"
+        exit 1
+    fi
+    
+    if [ -z "$TOKEN1" ]; then
+        echo "Error: token1 address not found in {{deployments-file}}"
+        echo "Please run 'just deploy-tokens' first"
+        exit 1
+    fi
+    
+    echo "Minting 1000 token0 to $ADDR_VAL..."
+    cast send "$TOKEN0" \
+        "mint(address,uint256)" "$ADDR_VAL" "1000e18" \
+        --private-key "$PK_VAL" \
+        --rpc-url "$RPC_VAL"
+    
+    echo ""
+    echo "Minting 1000 token1 to $ADDR_VAL..."
+    cast send "$TOKEN1" \
+        "mint(address,uint256)" "$ADDR_VAL" "1000e18" \
+        --private-key "$PK_VAL" \
+        --rpc-url "$RPC_VAL"
+    
+    echo ""
+    echo "✓ Successfully minted 1000 token0 and 1000 token1 to $ADDR_VAL"
