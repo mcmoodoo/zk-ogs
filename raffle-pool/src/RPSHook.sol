@@ -54,6 +54,19 @@ contract RPSHook is BaseHook, IUnlockCallback {
     mapping(bytes32 => PendingSwap) public pendingSwaps;
     mapping(bytes32 => bool) public usedCommitments;
 
+    // Track active games (games waiting for Player 2 or waiting for reveal)
+    bytes32[] public activeGames;
+    mapping(bytes32 => uint256) public activeGameIndex; // 1-based index (0 means not in array)
+
+    event GameCreated(
+        bytes32 indexed commitmentHash,
+        address indexed player1,
+        PoolId indexed poolId,
+        Currency currency,
+        uint256 contributionAmount,
+        uint256 timestamp
+    );
+
     event RaffleContribution(
         PoolId indexed poolId,
         address indexed contributor,
@@ -180,6 +193,12 @@ contract RPSHook is BaseHook, IUnlockCallback {
                 resolved: false
             });
             usedCommitments[commitmentHash] = true;
+            
+            // Add to active games list
+            activeGames.push(commitmentHash);
+            activeGameIndex[commitmentHash] = activeGames.length; // 1-based index
+            
+            emit GameCreated(commitmentHash, player1, poolId, currency, contributionAmount, block.timestamp);
         }
 
         return (BaseHook.afterSwap.selector, contributionAmount.toInt128());
@@ -343,6 +362,26 @@ contract RPSHook is BaseHook, IUnlockCallback {
         }
     }
 
+    function _removeFromActiveGames(bytes32 commitmentHash) internal {
+        uint256 index = activeGameIndex[commitmentHash];
+        if (index == 0) return; // Not in active games
+        
+        // Convert to 0-based index
+        uint256 idx = index - 1;
+        uint256 lastIndex = activeGames.length - 1;
+        
+        if (idx != lastIndex) {
+            // Move last element to the position of the element to remove
+            bytes32 lastHash = activeGames[lastIndex];
+            activeGames[idx] = lastHash;
+            activeGameIndex[lastHash] = index; // Update index of moved element
+        }
+        
+        // Remove last element
+        activeGames.pop();
+        delete activeGameIndex[commitmentHash];
+    }
+
     function _handleRefundCallback(bytes32 commitmentHash) internal returns (bytes memory) {
         PendingSwap memory swap = pendingSwaps[commitmentHash];
         require(swap.player1 != address(0), "Swap not found");
@@ -353,6 +392,7 @@ contract RPSHook is BaseHook, IUnlockCallback {
         contributionsByAddress[swap.player1][swap.poolId][swap.currency] -= swap.player1Contribution;
 
         delete pendingSwaps[commitmentHash];
+        _removeFromActiveGames(commitmentHash);
 
         emit SwapRefunded(
             commitmentHash,
@@ -394,6 +434,7 @@ contract RPSHook is BaseHook, IUnlockCallback {
         contributionsByAddress[player2][poolId][currency] -= player2Amount;
 
         delete pendingSwaps[commitmentHash];
+        _removeFromActiveGames(commitmentHash);
 
         return "";
     }
@@ -449,5 +490,73 @@ contract RPSHook is BaseHook, IUnlockCallback {
         returns (PendingSwap memory)
     {
         return pendingSwaps[commitmentHash];
+    }
+
+    /// @notice Get the total number of active games
+    /// @return The number of active games
+    function getActiveGamesCount() external view returns (uint256) {
+        return activeGames.length;
+    }
+
+    /// @notice Get an active game commitment hash by index
+    /// @param index The index in the active games array (0-based)
+    /// @return The commitment hash at the given index
+    function getActiveGameAtIndex(uint256 index) external view returns (bytes32) {
+        require(index < activeGames.length, "Index out of bounds");
+        return activeGames[index];
+    }
+
+    /// @notice Get all active game commitment hashes
+    /// @return An array of all active game commitment hashes
+    function getAllActiveGames() external view returns (bytes32[] memory) {
+        return activeGames;
+    }
+
+    /// @notice Get active games that are waiting for Player 2 (not yet joined)
+    /// @return An array of commitment hashes for games waiting for Player 2
+    function getGamesWaitingForPlayer2() external view returns (bytes32[] memory) {
+        bytes32[] memory waiting = new bytes32[](activeGames.length);
+        uint256 count = 0;
+        
+        for (uint256 i = 0; i < activeGames.length; i++) {
+            bytes32 hash = activeGames[i];
+            PendingSwap memory swap = pendingSwaps[hash];
+            if (!swap.player2Moved && !swap.resolved && swap.player1 != address(0)) {
+                waiting[count] = hash;
+                count++;
+            }
+        }
+        
+        // Resize array to actual count
+        bytes32[] memory result = new bytes32[](count);
+        for (uint256 i = 0; i < count; i++) {
+            result[i] = waiting[i];
+        }
+        
+        return result;
+    }
+
+    /// @notice Get active games that are waiting for Player 1 to reveal
+    /// @return An array of commitment hashes for games waiting for reveal
+    function getGamesWaitingForReveal() external view returns (bytes32[] memory) {
+        bytes32[] memory waiting = new bytes32[](activeGames.length);
+        uint256 count = 0;
+        
+        for (uint256 i = 0; i < activeGames.length; i++) {
+            bytes32 hash = activeGames[i];
+            PendingSwap memory swap = pendingSwaps[hash];
+            if (swap.player2Moved && !swap.revealed && !swap.resolved) {
+                waiting[count] = hash;
+                count++;
+            }
+        }
+        
+        // Resize array to actual count
+        bytes32[] memory result = new bytes32[](count);
+        for (uint256 i = 0; i < count; i++) {
+            result[i] = waiting[i];
+        }
+        
+        return result;
     }
 }

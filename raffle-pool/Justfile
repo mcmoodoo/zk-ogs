@@ -1110,3 +1110,303 @@ mint-tokens ADDRESS="0x2f04d60991191005103d73bdcf12187a824d42a4" RPC_URL="http:/
     
     echo ""
     echo "✓ Successfully minted 1000 token0 and 1000 token1 to $ADDR_VAL"
+
+# ============================================================================
+# Query Commands
+# ============================================================================
+
+# Query the hook contract and fetch all currently open games
+# Usage: just query-games [RPC_URL=http://localhost:8545] [FROM_BLOCK=0]
+query-games RPC_URL="http://localhost:8545" FROM_BLOCK="0":
+    #!/usr/bin/env bash
+    set -e
+    
+    # Extract and clean parameters
+    RPC_VAL="{{RPC_URL}}"
+    FROM_BLOCK_VAL="{{FROM_BLOCK}}"
+    
+    # Strip parameter name prefix if present
+    case "$RPC_VAL" in
+        RPC_URL=*)
+            RPC_VAL="${RPC_VAL#RPC_URL=}"
+            ;;
+    esac
+    case "$FROM_BLOCK_VAL" in
+        FROM_BLOCK=*)
+            FROM_BLOCK_VAL="${FROM_BLOCK_VAL#FROM_BLOCK=}"
+            ;;
+    esac
+    
+    # Remove quotes and trim
+    RPC_VAL=$(echo "$RPC_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    FROM_BLOCK_VAL=$(echo "$FROM_BLOCK_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    
+    # Get hook address from deployments.json
+    HOOK_ADDR=$(just _get-address hook)
+    if [ -z "$HOOK_ADDR" ]; then
+        echo "Error: hook address not found in {{deployments-file}}"
+        echo "Please run 'just deploy-hook' first"
+        exit 1
+    fi
+    
+    echo "=== Querying Active Games ==="
+    echo "Hook Address: $HOOK_ADDR"
+    echo "RPC URL: $RPC_VAL"
+    echo ""
+    
+    # Query the contract directly for active games
+    echo "Querying contract for active games..."
+    
+    # Get count of active games
+    ACTIVE_COUNT=$(cast call "$HOOK_ADDR" \
+        "getActiveGamesCount()(uint256)" \
+        --rpc-url "$RPC_VAL" 2>/dev/null || echo "0")
+    
+    # Remove "uint256:" prefix if present
+    ACTIVE_COUNT=$(echo "$ACTIVE_COUNT" | sed 's/uint256://' | xargs)
+    
+    if [ -z "$ACTIVE_COUNT" ] || [ "$ACTIVE_COUNT" = "0" ]; then
+        echo "No active games found."
+        exit 0
+    fi
+    
+    echo "Found $ACTIVE_COUNT active game(s)"
+    echo ""
+    
+    # Get all active games
+    ACTIVE_GAMES=$(cast call "$HOOK_ADDR" \
+        "getAllActiveGames()(bytes32[])" \
+        --rpc-url "$RPC_VAL" 2>/dev/null || echo "")
+    
+    if [ -z "$ACTIVE_GAMES" ]; then
+        echo "Error: Could not retrieve active games from contract."
+        exit 1
+    fi
+    
+    # Extract commitment hashes from the array
+    # cast outputs arrays in a specific format, we need to parse it
+    UNIQUE_HASHES=$(echo "$ACTIVE_GAMES" | grep -oE '0x[a-fA-F0-9]{64}' || echo "")
+    
+    if [ -z "$UNIQUE_HASHES" ]; then
+        echo "No active games found."
+        exit 0
+    fi
+    
+    # Query each commitment hash to check if it's still open
+    OPEN_COUNT=0
+    RESOLVED_COUNT=0
+    REFUNDED_COUNT=0
+    
+    echo "Checking game status..."
+    echo ""
+    
+    while IFS= read -r commitment_hash; do
+        if [ -z "$commitment_hash" ]; then
+            continue
+        fi
+        
+        # Query getPendingSwap - returns a tuple with game data
+        # The function signature is: getPendingSwap(bytes32)(address,uint256,bytes32,address,uint256,bool,address,uint8,uint256,uint256,bool,uint8,bytes32,bool)
+        GAME_DATA=$(cast call "$HOOK_ADDR" \
+            "getPendingSwap(bytes32)(address,uint256,bytes32,address,uint256,bool,address,uint8,uint256,uint256,bool,uint8,bytes32,bool)" \
+            "$commitment_hash" \
+            --rpc-url "$RPC_VAL" 2>/dev/null || echo "")
+        
+        if [ -z "$GAME_DATA" ] || [ "$GAME_DATA" = "0x" ]; then
+            # Game doesn't exist (might be refunded or resolved)
+            continue
+        fi
+        
+        # Parse the tuple - cast outputs tuples as a comma-separated list
+        # Format: (address player1, uint256 timestamp, bytes32 poolId, address currency, uint256 player1Contribution, bool player2Moved, address player2, uint8 player2Move, uint256 player2Contribution, uint256 player2MoveTimestamp, bool revealed, uint8 player1Move, bytes32 salt, bool resolved)
+        
+        # Remove parentheses and split by comma
+        CLEANED_DATA=$(echo "$GAME_DATA" | sed 's/^[()]*//;s/[()]*$//' | tr -d ' ')
+        
+        # Extract player1 (first address)
+        PLAYER1=$(echo "$CLEANED_DATA" | grep -oE '0x[a-fA-F0-9]{40}' | head -1 || echo "")
+        
+        # Check if player1 is zero address (game doesn't exist)
+        if [ -z "$PLAYER1" ] || [ "$PLAYER1" = "0x0000000000000000000000000000000000000000" ]; then
+            continue
+        fi
+        
+        # Use Python or a simpler approach to parse the tuple
+        # For now, let's use a more reliable method with cast abi-decode
+        # But first, let's try to extract key fields using pattern matching
+        
+        # Get all addresses in order
+        ADDRS=($(echo "$GAME_DATA" | grep -oE '0x[a-fA-F0-9]{40}' || echo ""))
+        PLAYER1="${ADDRS[0]}"
+        if [ ${#ADDRS[@]} -gt 2 ]; then
+            PLAYER2="${ADDRS[2]}"
+        else
+            PLAYER2=""
+        fi
+        
+        # Get all booleans in order (player2Moved, revealed, resolved)
+        BOOLS=($(echo "$GAME_DATA" | grep -oiE '(true|false)' || echo "false false false"))
+        PLAYER2_MOVED="${BOOLS[0]:-false}"
+        REVEALED="${BOOLS[1]:-false}"
+        RESOLVED="${BOOLS[2]:-false}"
+        
+        # Get numeric values - contributions are at specific positions
+        # We'll extract all numbers and use positional access
+        NUMBERS=($(echo "$GAME_DATA" | grep -oE '[0-9]+' || echo "0 0 0 0"))
+        # player1Contribution is typically the 2nd large number (after timestamp)
+        # player2Contribution is typically the 4th large number
+        # For simplicity, sum all contributions if we can't parse precisely
+        PLAYER1_CONTRIB="${NUMBERS[1]:-0}"
+        PLAYER2_CONTRIB="${NUMBERS[3]:-0}"
+        
+        # If parsing failed, try to get at least some info
+        if [ -z "$PLAYER1_CONTRIB" ] || [ "$PLAYER1_CONTRIB" = "0" ]; then
+            # Try alternative parsing
+            PLAYER1_CONTRIB=$(echo "$GAME_DATA" | grep -oE 'player1Contribution[^0-9]*[0-9]+' | grep -oE '[0-9]+' | head -1 || echo "0")
+        fi
+        
+        if [ "$RESOLVED" = "true" ]; then
+            RESOLVED_COUNT=$((RESOLVED_COUNT + 1))
+            continue
+        fi
+        
+        # Game is open
+        OPEN_COUNT=$((OPEN_COUNT + 1))
+        
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Game #$OPEN_COUNT"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Commitment Hash: $commitment_hash"
+        echo "Player 1:        $PLAYER1"
+        echo "Status:          $(
+            if [ "$REVEALED" = "true" ]; then
+                echo "Revealed (resolved)"
+            elif [ "$PLAYER2_MOVED" = "true" ]; then
+                echo "Waiting for Player 1 to reveal"
+            else
+                echo "Waiting for Player 2"
+            fi
+        )"
+        
+        if [ "$PLAYER2_MOVED" = "true" ] && [ -n "$PLAYER2" ]; then
+            echo "Player 2:        $PLAYER2"
+        fi
+        
+        # Try to calculate prize pool, but don't fail if we can't parse contributions
+        TOTAL_CONTRIB=$(echo "$PLAYER1_CONTRIB $PLAYER2_CONTRIB" | awk '{print $1+$2}' 2>/dev/null || echo "0")
+        if [ "$TOTAL_CONTRIB" != "0" ] && [ -n "$TOTAL_CONTRIB" ]; then
+            PRIZE_DISPLAY=$(cast --to-unit "$TOTAL_CONTRIB" ether 2>/dev/null || echo "$TOTAL_CONTRIB wei")
+            echo "Prize Pool:      $PRIZE_DISPLAY"
+        else
+            echo "Prize Pool:      N/A (unable to parse)"
+        fi
+        echo ""
+    done <<< "$UNIQUE_HASHES"
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Summary:"
+    echo "  Open Games:    $OPEN_COUNT"
+    echo "  Resolved:      $RESOLVED_COUNT"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "✓ Query complete. All active games are shown above."
+
+# Query games waiting for Player 2 (created by P1, not yet joined)
+# Usage: just query-games-waiting [RPC_URL=http://localhost:8545]
+query-games-waiting RPC_URL="http://localhost:8545":
+    #!/usr/bin/env bash
+    set -e
+    
+    # Extract and clean parameters
+    RPC_VAL="{{RPC_URL}}"
+    
+    # Strip parameter name prefix if present
+    case "$RPC_VAL" in
+        RPC_URL=*)
+            RPC_VAL="${RPC_VAL#RPC_URL=}"
+            ;;
+    esac
+    
+    # Remove quotes and trim
+    RPC_VAL=$(echo "$RPC_VAL" | sed -e 's/^["'\'']*//' -e 's/["'\'']*$//' | xargs)
+    
+    # Get hook address from deployments.json
+    HOOK_ADDR=$(just _get-address hook)
+    if [ -z "$HOOK_ADDR" ]; then
+        echo "Error: hook address not found in {{deployments-file}}"
+        echo "Please run 'just deploy-hook' first"
+        exit 1
+    fi
+    
+    echo "=== Querying Games Waiting for Player 2 ==="
+    echo "Hook Address: $HOOK_ADDR"
+    echo "RPC URL: $RPC_VAL"
+    echo ""
+    
+    # Query the contract for games waiting for Player 2
+    WAITING_GAMES=$(cast call "$HOOK_ADDR" \
+        "getGamesWaitingForPlayer2()(bytes32[])" \
+        --rpc-url "$RPC_VAL" 2>/dev/null || echo "")
+    
+    if [ -z "$WAITING_GAMES" ]; then
+        echo "No games waiting for Player 2 found."
+        exit 0
+    fi
+    
+    # Extract commitment hashes
+    HASHES=$(echo "$WAITING_GAMES" | grep -oE '0x[a-fA-F0-9]{64}' || echo "")
+    
+    if [ -z "$HASHES" ]; then
+        echo "No games waiting for Player 2 found."
+        exit 0
+    fi
+    
+    COUNT=$(echo "$HASHES" | wc -l)
+    echo "Found $COUNT game(s) waiting for Player 2:"
+    echo ""
+    
+    GAME_NUM=0
+    while IFS= read -r commitment_hash; do
+        if [ -z "$commitment_hash" ]; then
+            continue
+        fi
+        
+        GAME_NUM=$((GAME_NUM + 1))
+        
+        # Query game details
+        GAME_DATA=$(cast call "$HOOK_ADDR" \
+            "getPendingSwap(bytes32)(address,uint256,bytes32,address,uint256,bool,address,uint8,uint256,uint256,bool,uint8,bytes32,bool)" \
+            "$commitment_hash" \
+            --rpc-url "$RPC_VAL" 2>/dev/null || echo "")
+        
+        if [ -z "$GAME_DATA" ] || [ "$GAME_DATA" = "0x" ]; then
+            continue
+        fi
+        
+        # Extract player1 and contribution
+        ADDRS=($(echo "$GAME_DATA" | grep -oE '0x[a-fA-F0-9]{40}' || echo ""))
+        PLAYER1="${ADDRS[0]}"
+        NUMBERS=($(echo "$GAME_DATA" | grep -oE '[0-9]+' || echo "0"))
+        PLAYER1_CONTRIB="${NUMBERS[1]:-0}"
+        
+        if [ -z "$PLAYER1" ] || [ "$PLAYER1" = "0x0000000000000000000000000000000000000000" ]; then
+            continue
+        fi
+        
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Game #$GAME_NUM"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Commitment Hash: $commitment_hash"
+        echo "Player 1:        $PLAYER1"
+        echo "Status:          Waiting for Player 2"
+        
+        if [ -n "$PLAYER1_CONTRIB" ] && [ "$PLAYER1_CONTRIB" != "0" ]; then
+            PRIZE_DISPLAY=$(cast --to-unit "$PLAYER1_CONTRIB" ether 2>/dev/null || echo "$PLAYER1_CONTRIB wei")
+            echo "Prize Pool:      $PRIZE_DISPLAY (Player 1 contribution)"
+        fi
+        echo ""
+    done <<< "$HASHES"
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Total: $GAME_NUM game(s) waiting for Player 2"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
