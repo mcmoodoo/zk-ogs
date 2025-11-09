@@ -303,11 +303,6 @@ The contract handles:
 - **Winner Resolution**: Uses `_determineWinner()` matching circuit logic
 - **ZK Proof Verification**: Receives proof bytes via `resolveGame()` (verification pending if verifier is set)
 
-### TODO
-
-- **On-chain verification not yet implemented**: Proofs are generated and verified client-side, but contract doesn't verify them yet (unless verifier contract is deployed and set)
-- **To enable on-chain verification**: Generate verifier contract using Noir's verifier generation tools, deploy it, and call `setVerifier()` on the game contract
-
 ## License
 
 GPLv3
