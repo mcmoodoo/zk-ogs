@@ -255,6 +255,14 @@ npx hardhat run scripts/fundWallet.ts --network localhost <YOUR_METAMASK_ADDRESS
 - **Swap reentrancy** – Escrow updates happen before the pool’s state changes to avoid double-escrowing across nested hooks.  
 - **Proof optionality** – During development you can deploy without the verifier contract; the manager accepts a mock flag to skip proof verification while still enforcing commitments.
 
+## Design Exploration
+
+We tracked the alternative commit–reveal models that led to the current flow, including trusted adjudication, zk approaches, and the final hybrid we shipped. Review the discussion and trade-offs in [`notes/different_approach.md`](notes/different_approach.md).
+
+## Further Plan
+
+- [ ] Explore implementing another game that’s more suitable for ZKP (e.g., Battleship).
+
 ## License
 
 GPLv3
