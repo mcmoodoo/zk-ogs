@@ -53,6 +53,12 @@ let POOL_MANAGER_ADDRESS = null;
 let DEPLOYED_CHAIN_ID = null;
 let DEPLOYED_RPC_URL = null;
 
+// Deployments data (loaded from deployments.json)
+let deployments = null;
+
+// ERC20 ABI (will be loaded from deployments or use fallback)
+let erc20ABI = null;
+
 // Pool configuration (from deployments.json or hardcoded)
 const POOL_FEE = 3000; // 0.3% (3000 = 0.3% in Uniswap V4)
 const TICK_SPACING = 60;
@@ -65,7 +71,7 @@ async function loadDeployments() {
     if (!deploymentsResponse.ok) {
       throw new Error(`Failed to load deployments: ${deploymentsResponse.statusText}`);
     }
-    const deployments = await deploymentsResponse.json();
+    deployments = await deploymentsResponse.json();
     
     DEPLOYED_CHAIN_ID = deployments.chainId?.toString();
     DEPLOYED_RPC_URL = deployments.rpcUrl;
@@ -82,10 +88,22 @@ async function loadDeployments() {
       if (deployments.contracts.token0) {
         TOKEN0_ADDRESS = deployments.contracts.token0.address;
         log(`✅ Token0 address: ${TOKEN0_ADDRESS}`);
+        // Update dropdown option
+        const token0Option = document.getElementById("token0Option");
+        if (token0Option) {
+          token0Option.value = TOKEN0_ADDRESS;
+          token0Option.textContent = `Token0 (${TOKEN0_ADDRESS.slice(0, 6)}...${TOKEN0_ADDRESS.slice(-4)})`;
+        }
       }
       if (deployments.contracts.token1) {
         TOKEN1_ADDRESS = deployments.contracts.token1.address;
         log(`✅ Token1 address: ${TOKEN1_ADDRESS}`);
+        // Update dropdown option
+        const token1Option = document.getElementById("token1Option");
+        if (token1Option) {
+          token1Option.value = TOKEN1_ADDRESS;
+          token1Option.textContent = `Token1 (${TOKEN1_ADDRESS.slice(0, 6)}...${TOKEN1_ADDRESS.slice(-4)})`;
+        }
       }
       if (deployments.contracts.poolManager) {
         POOL_MANAGER_ADDRESS = deployments.contracts.poolManager.address;
@@ -94,6 +112,9 @@ async function loadDeployments() {
       if (deployments.contracts.rockPaperScissors) {
         RPS_ADDRESS = deployments.contracts.rockPaperScissors.address;
         log(`✅ RockPaperScissors address: ${RPS_ADDRESS}`);
+      }
+      if (deployments.contracts.degenRPS) {
+        log(`✅ DegenRPS address: ${deployments.contracts.degenRPS.address}`);
       }
     } else {
       log("⚠️ No contracts found in deployments.json");
@@ -256,6 +277,12 @@ async function ensureCorrectNetwork() {
 // Initialize contract instances
 async function initializeContracts() {
   if (!signer) return;
+  
+  // Ensure deployments are loaded
+  if (!deployments) {
+    log("⚠️ Deployments not loaded, loading now...");
+    await loadDeployments();
+  }
 
   try {
     // Router ABI (minimal - just the functions we need)
@@ -286,30 +313,77 @@ async function initializeContracts() {
       hookContract = new ethers.Contract(HOOK_ADDRESS, hookABI, signer);
     }
 
-    // RockPaperScissors ABI
-    const rpsABI = [
-      "function createGame(bytes32 commitment, uint256 timeout) external returns (uint256)",
-      "function joinGame(uint256 gameId, uint8 move2) external",
-      "function resolveGame(uint256 gameId, uint8 move1, bytes32 salt1, bytes calldata proof) external",
-      "function getGame(uint256 gameId) external view returns (tuple(uint256 gameId, address player1, address player2, uint8 status, bytes32 player1Commitment, uint8 player1Move, uint8 player2Move, uint8 winner, uint256 createdAt, uint256 timeout, uint256 revealDeadline))",
-      "function forfeitGame(uint256 gameId) external",
-      "event GameCreated(uint256 indexed gameId, address indexed player1, bytes32 commitment, uint256 timeout)",
-      "event PlayerJoined(uint256 indexed gameId, address indexed player2, uint8 move2, uint256 revealDeadline)",
-      "event GameResolved(uint256 indexed gameId, uint8 winner)"
-    ];
-
-    if (RPS_ADDRESS) {
-      rpsContract = new ethers.Contract(RPS_ADDRESS, rpsABI, signer);
+    // Load DegenRPS address and ABI from deployments
+    let DEGEN_RPS_ADDRESS = null;
+    let degenRPSABI = null;
+    
+    if (deployments && deployments.contracts && deployments.contracts.degenRPS) {
+      DEGEN_RPS_ADDRESS = deployments.contracts.degenRPS.address;
+      degenRPSABI = deployments.contracts.degenRPS.abi;
+      log(`✅ DegenRPS address: ${DEGEN_RPS_ADDRESS}`);
+      if (degenRPSABI && degenRPSABI.length > 0) {
+        log(`✅ DegenRPS ABI loaded (${degenRPSABI.length} entries)`);
+      } else {
+        log(`⚠️ DegenRPS ABI not found in deployments.json, using fallback`);
+        // Fallback to hardcoded ABI if not in deployments
+        degenRPSABI = [
+          "function createGame(address tokenAddress, uint256 betAmount, bytes32 commitment, bytes calldata proof) external returns (uint256)",
+          "function joinGame(uint256 gameId, uint8 move) external",
+          "function revealAndSettle(uint256 gameId, uint8 move, bytes32 salt, bytes calldata proof) external",
+          "function withdraw(uint256 gameId) external",
+          "function refund(uint256 gameId) external",
+          "function getGame(uint256 gameId) external view returns (tuple(address player1, address player2, address token, uint256 betAmount, bytes32 commitment, bytes proof, uint8 player2Move, uint8 player1Move, uint8 state, uint256 createdAt, uint256 revealDeadline, address winner))",
+          "function getGamesWaitingForPlayer2() external view returns (uint256[])",
+          "function revealTimeout() external view returns (uint256)",
+          "event GameCreated(uint256 indexed gameId, address indexed player1, address indexed token, uint256 betAmount, bytes32 commitment)",
+          "event Player2Joined(uint256 indexed gameId, address indexed player2, uint8 move)",
+          "event MoveRevealed(uint256 indexed gameId, address indexed player1, uint8 move)",
+          "event GameSettled(uint256 indexed gameId, address indexed winner, uint256 amount)",
+          "event PrizeWithdrawn(uint256 indexed gameId, address indexed winner, uint256 amount)",
+          "event GameRefunded(uint256 indexed gameId, address indexed player, uint256 amount)"
+        ];
+      }
+    } else if (RPS_ADDRESS) {
+      // Fallback to old RPS_ADDRESS if degenRPS not in deployments
+      DEGEN_RPS_ADDRESS = RPS_ADDRESS;
+      log(`⚠️ Using RPS_ADDRESS as DegenRPS: ${DEGEN_RPS_ADDRESS}`);
+      // Use fallback ABI
+      degenRPSABI = [
+        "function createGame(address tokenAddress, uint256 betAmount, bytes32 commitment, bytes calldata proof) external returns (uint256)",
+        "function joinGame(uint256 gameId, uint8 move) external",
+        "function revealAndSettle(uint256 gameId, uint8 move, bytes32 salt, bytes calldata proof) external",
+        "function withdraw(uint256 gameId) external",
+        "function refund(uint256 gameId) external",
+        "function getGame(uint256 gameId) external view returns (tuple(address player1, address player2, address token, uint256 betAmount, bytes32 commitment, bytes proof, uint8 player2Move, uint8 player1Move, uint8 state, uint256 createdAt, uint256 revealDeadline, address winner))",
+        "function getGamesWaitingForPlayer2() external view returns (uint256[])",
+        "function revealTimeout() external view returns (uint256)",
+        "event GameCreated(uint256 indexed gameId, address indexed player1, address indexed token, uint256 betAmount, bytes32 commitment)",
+        "event Player2Joined(uint256 indexed gameId, address indexed player2, uint8 move)",
+        "event MoveRevealed(uint256 indexed gameId, address indexed player1, uint8 move)",
+        "event GameSettled(uint256 indexed gameId, address indexed winner, uint256 amount)",
+        "event PrizeWithdrawn(uint256 indexed gameId, address indexed winner, uint256 amount)",
+        "event GameRefunded(uint256 indexed gameId, address indexed player, uint256 amount)"
+      ];
     }
 
-    // ERC20 ABI (minimal)
-    const erc20ABI = [
-      "function approve(address spender, uint256 amount) external returns (bool)",
-      "function allowance(address owner, address spender) external view returns (uint256)",
-      "function balanceOf(address account) external view returns (uint256)",
-      "function decimals() external view returns (uint8)",
-      "function symbol() external view returns (string)"
-    ];
+    if (DEGEN_RPS_ADDRESS && degenRPSABI) {
+      rpsContract = new ethers.Contract(DEGEN_RPS_ADDRESS, degenRPSABI, signer);
+    }
+
+    // ERC20 ABI - try to get from deployments, fallback to minimal ABI
+    if (deployments && deployments.contracts && deployments.contracts.token0 && deployments.contracts.token0.abi && deployments.contracts.token0.abi.length > 0) {
+      erc20ABI = deployments.contracts.token0.abi;
+      log(`✅ Token0 ABI loaded from deployments (${erc20ABI.length} entries)`);
+    } else {
+      // Fallback to minimal ABI
+      erc20ABI = [
+        "function approve(address spender, uint256 amount) external returns (bool)",
+        "function allowance(address owner, address spender) external view returns (uint256)",
+        "function balanceOf(address account) external view returns (uint256)",
+        "function decimals() external view returns (uint8)",
+        "function symbol() external view returns (string)"
+      ];
+    }
 
     if (TOKEN0_ADDRESS) {
       token0Contract = new ethers.Contract(TOKEN0_ADDRESS, erc20ABI, signer);
@@ -405,17 +479,31 @@ async function updateMakerTokenBalance() {
 
   try {
     const address = await signer.getAddress();
-    const direction = document.getElementById("makerSwapDirection")?.value || "token0ToToken1";
+    // Get token address from dropdown
+    const tokenSelect = document.getElementById("makerTokenSelect");
+    const tokenAddress = tokenSelect?.value || document.getElementById("makerTokenAddress")?.value;
     
-    let tokenContract, tokenAddress, tokenSymbol;
-    if (direction === "token0ToToken1") {
+    if (!tokenAddress) {
+      document.getElementById("makerTokenBalance").textContent = "Please select a token";
+      return;
+    }
+    
+    let tokenContract, tokenSymbol;
+    if (tokenAddress.toLowerCase() === TOKEN0_ADDRESS?.toLowerCase()) {
       tokenContract = token0Contract;
-      tokenAddress = TOKEN0_ADDRESS;
       tokenSymbol = await safeTokenCall(tokenContract, "symbol", "Token0");
-    } else {
+    } else if (tokenAddress.toLowerCase() === TOKEN1_ADDRESS?.toLowerCase()) {
       tokenContract = token1Contract;
-      tokenAddress = TOKEN1_ADDRESS;
       tokenSymbol = await safeTokenCall(tokenContract, "symbol", "Token1");
+    } else {
+      // Custom token address - create contract on the fly
+      const erc20ABI = [
+        "function balanceOf(address account) external view returns (uint256)",
+        "function decimals() external view returns (uint8)",
+        "function symbol() external view returns (string)"
+      ];
+      tokenContract = new ethers.Contract(tokenAddress, erc20ABI, signer);
+      tokenSymbol = await safeTokenCall(tokenContract, "symbol", "Token");
     }
 
     const balance = await safeTokenCallWithParam(tokenContract, "balanceOf", address, 0n);
@@ -443,16 +531,27 @@ async function updateMakerTokenBalance() {
 // Check and update approval status for Maker view
 async function checkMakerApproval() {
   console.log("checkMakerApproval() called");
-  if (!signer || !routerContract || !token0Contract || !token1Contract) {
+  if (!signer || !rpsContract) {
     console.warn("checkMakerApproval() early return: contracts not initialized");
     return;
   }
 
   try {
     const address = await signer.getAddress();
-    const direction = document.getElementById("makerSwapDirection")?.value || "token0ToToken1";
+    // Get token address from dropdown
+    const tokenSelect = document.getElementById("makerTokenSelect");
+    const tokenAddress = tokenSelect?.value || document.getElementById("makerTokenAddress")?.value;
     const amountInput = document.getElementById("makerSwapAmount")?.value;
-    console.log("checkMakerApproval() - direction:", direction, "amountInput:", amountInput);
+    console.log("checkMakerApproval() - tokenAddress:", tokenAddress, "amountInput:", amountInput);
+    
+    if (!tokenAddress || !ethers.isAddress(tokenAddress)) {
+      console.log("checkMakerApproval() - no token selected, clearing approval status");
+      const approvalDiv = document.getElementById("makerApprovalStatus");
+      if (approvalDiv) {
+        approvalDiv.innerHTML = "";
+      }
+      return;
+    }
     
     if (!amountInput || parseFloat(amountInput) <= 0) {
       console.log("checkMakerApproval() - no amount input, clearing approval status");
@@ -463,16 +562,32 @@ async function checkMakerApproval() {
       return;
     }
 
+    // Get token contract
     let tokenContract;
-    if (direction === "token0ToToken1") {
+    if (tokenAddress.toLowerCase() === TOKEN0_ADDRESS?.toLowerCase()) {
       tokenContract = token0Contract;
-    } else {
+    } else if (tokenAddress.toLowerCase() === TOKEN1_ADDRESS?.toLowerCase()) {
       tokenContract = token1Contract;
+    } else {
+      // Custom token - create contract on the fly
+      const erc20ABI = [
+        "function approve(address spender, uint256 amount) external returns (bool)",
+        "function allowance(address owner, address spender) external view returns (uint256)",
+        "function decimals() external view returns (uint8)"
+      ];
+      tokenContract = new ethers.Contract(tokenAddress, erc20ABI, signer);
     }
+    
+    if (!tokenContract) {
+      return;
+    }
+    
+    // Get DegenRPS address for approval check
+    const DEGEN_RPS_ADDRESS = rpsContract.target || rpsContract.address;
 
     const decimals = await safeTokenCall(tokenContract, "decimals", 18);
     const amount = ethers.parseUnits(amountInput, decimals);
-    const allowance = await safeTokenCallWithParam(tokenContract, "allowance", [address, ROUTER_ADDRESS], 0n);
+    const allowance = await safeTokenCallWithParam(tokenContract, "allowance", [address, DEGEN_RPS_ADDRESS], 0n);
 
     const approvalDiv = document.getElementById("makerApprovalStatus");
     if (approvalDiv) {
@@ -491,10 +606,9 @@ async function checkMakerApproval() {
       }
     }
 
-    const createBtn = document.getElementById("makerCreateGameBtn");
-    if (createBtn) {
-      createBtn.disabled = !(allowance >= amount && gameState.move !== null && amountInput);
-    }
+    // Note: We don't disable the button based on approval here
+    // The button state is managed by updateMakerButtonStates()
+    // Approval check happens when creating the game
   } catch (error) {
     log(`⚠️ Error checking approval: ${error.message}`);
   }
@@ -512,23 +626,22 @@ async function approveToken(view = "maker") {
   }
   
   // Ensure deployments are loaded
-  if (!ROUTER_ADDRESS) {
-    log("⚠️ Router address not found, loading deployments...");
+  if (!rpsContract) {
+    log("⚠️ DegenRPS contract not found, loading deployments...");
     try {
       await loadDeployments();
+      await initializeContracts();
     } catch (error) {
       log(`❌ Error loading deployments: ${error.message}`);
       console.error("Deployments loading error:", error);
     }
   }
   
-  if (!ROUTER_ADDRESS) {
-    log("❌ Router address not found. Please check deployments.json");
-    console.error("No ROUTER_ADDRESS:", ROUTER_ADDRESS);
+  if (!rpsContract) {
+    log("❌ DegenRPS contract not found. Please check deployments.json");
+    console.error("No rpsContract:", rpsContract);
     return;
   }
-  
-  log(`✅ Router address found: ${ROUTER_ADDRESS}`);
 
   const networkOk = await ensureCorrectNetwork();
   if (!networkOk) {
@@ -536,15 +649,19 @@ async function approveToken(view = "maker") {
     return;
   }
 
-  const direction = document.getElementById("makerSwapDirection")?.value || "token0ToToken1";
+  // Get token address from dropdown
+  const tokenSelect = document.getElementById("makerTokenSelect");
+  const tokenAddress = tokenSelect?.value || document.getElementById("makerTokenAddress")?.value;
   const amountInput = document.getElementById("makerSwapAmount")?.value;
 
-  log(`📋 Approval details:`);
-  log(`   Direction: ${direction}`);
-  log(`   Amount: ${amountInput || "Not specified"}`);
+  if (!tokenAddress || !ethers.isAddress(tokenAddress)) {
+    log("❌ Please select a token from the dropdown");
+    return;
+  }
 
-  // Note: We don't require amount for approval - we approve max amount
-  // But we still need to know which token to approve based on direction
+  log(`📋 Approval details:`);
+  log(`   Token: ${tokenAddress}`);
+  log(`   Amount: ${amountInput || "Not specified"}`);
 
   const btn = document.getElementById("makerApproveTokenBtn");
   if (!btn) {
@@ -559,57 +676,51 @@ async function approveToken(view = "maker") {
 
   try {
     // Initialize contracts if needed
-    if (!token0Contract || !token1Contract) {
-      log("⚠️ Contracts not initialized, initializing now...");
-      await initializeContracts();
+    await initializeContracts();
+
+    if (!rpsContract) {
+      throw new Error("DegenRPS contract not available");
     }
 
-    if (!token0Contract || !token1Contract) {
-      throw new Error("Failed to initialize token contracts");
+    // Get token contract
+    let tokenContract, tokenSymbol;
+    if (tokenAddress.toLowerCase() === TOKEN0_ADDRESS?.toLowerCase()) {
+      tokenContract = token0Contract;
+      tokenSymbol = await safeTokenCall(tokenContract, "symbol", "Token0");
+    } else if (tokenAddress.toLowerCase() === TOKEN1_ADDRESS?.toLowerCase()) {
+      tokenContract = token1Contract;
+      tokenSymbol = await safeTokenCall(tokenContract, "symbol", "Token1");
+    } else {
+      // Custom token - create contract on the fly
+      const erc20ABI = [
+        "function approve(address spender, uint256 amount) external returns (bool)",
+        "function symbol() external view returns (string)"
+      ];
+      tokenContract = new ethers.Contract(tokenAddress, erc20ABI, signer);
+      tokenSymbol = await safeTokenCall(tokenContract, "symbol", "Token");
     }
     
-    log("✅ Token contracts initialized");
-
-    let tokenContract, tokenSymbol, tokenAddress;
-    if (direction === "token0ToToken1") {
-      tokenContract = token0Contract;
-      tokenAddress = TOKEN0_ADDRESS;
-      if (!tokenContract) {
-        throw new Error("Token0 contract not available");
-      }
-      tokenSymbol = await safeTokenCall(tokenContract, "symbol", "Token0");
-      log(`✅ Selected Token0 (${tokenSymbol}) at ${tokenAddress}`);
-    } else {
-      tokenContract = token1Contract;
-      tokenAddress = TOKEN1_ADDRESS;
-      if (!tokenContract) {
-        throw new Error("Token1 contract not available");
-      }
-      tokenSymbol = await safeTokenCall(tokenContract, "symbol", "Token1");
-      log(`✅ Selected Token1 (${tokenSymbol}) at ${tokenAddress}`);
+    if (!tokenContract) {
+      throw new Error("Token contract not available");
     }
 
-    if (!tokenAddress) {
-      throw new Error(`Token address not found for direction: ${direction}`);
-    }
-
-    const decimals = await safeTokenCall(tokenContract, "decimals", 18);
-    // Approve a large amount to avoid repeated approvals
+    // Get DegenRPS address for approval
+    const DEGEN_RPS_ADDRESS = rpsContract.target || rpsContract.address;
     const maxApproval = ethers.MaxUint256;
 
-    log(`🔓 Approving ${tokenSymbol} for router...`);
+    log(`🔓 Approving ${tokenSymbol} for DegenRPS...`);
     log(`   Token: ${tokenSymbol} (${tokenAddress})`);
-    log(`   Router: ${ROUTER_ADDRESS}`);
+    log(`   DegenRPS: ${DEGEN_RPS_ADDRESS}`);
     log(`   Amount: Maximum (${maxApproval.toString()})`);
-    console.log(`Approving ${tokenSymbol} for router at ${ROUTER_ADDRESS}`);
+    console.log(`Approving ${tokenSymbol} for DegenRPS at ${DEGEN_RPS_ADDRESS}`);
     
-    const tx = await tokenContract.approve(ROUTER_ADDRESS, maxApproval);
+    const tx = await tokenContract.approve(DEGEN_RPS_ADDRESS, maxApproval);
     log(`📤 Transaction sent: ${tx.hash}`);
     console.log(`Transaction hash: ${tx.hash}`);
     
     log("⏳ Waiting for confirmation...");
     const receipt = await tx.wait();
-    log(`✅ ${tokenSymbol} approved! Confirmed in block ${receipt.blockNumber}`);
+    log(`✅ ${tokenSymbol} approved for DegenRPS! Confirmed in block ${receipt.blockNumber}`);
     console.log(`Approval confirmed in block ${receipt.blockNumber}`);
 
     // Update approval status display
@@ -795,7 +906,13 @@ function updateMakerButtonStates() {
     const hasMove = gameState.move !== null && gameState.move !== undefined;
     const amountInput = document.getElementById("makerSwapAmount")?.value;
     const hasAmount = amountInput && parseFloat(amountInput) > 0;
-    const shouldEnable = hasMove && hasAmount;
+    
+    // Check if token is selected
+    const tokenSelect = document.getElementById("makerTokenSelect");
+    const tokenAddress = tokenSelect?.value || document.getElementById("makerTokenAddress")?.value;
+    const hasToken = tokenAddress && ethers.isAddress(tokenAddress);
+    
+    const shouldEnable = hasMove && hasAmount && hasToken;
     
     createBtn.disabled = !shouldEnable;
     
@@ -807,7 +924,7 @@ function updateMakerButtonStates() {
       createBtn.classList.add("disabled:bg-gray-400", "disabled:cursor-not-allowed");
     }
     
-    console.log(`Button state updated: move=${hasMove}, amount=${hasAmount}, enabled=${shouldEnable}`);
+    console.log(`Button state updated: move=${hasMove}, amount=${hasAmount}, token=${hasToken}, enabled=${shouldEnable}`);
   }
 }
 
@@ -840,10 +957,10 @@ function updateButtonStates() {
   }
 }
 
-// Create game with swap (Maker)
+// Create game with DegenRPS (Maker)
 async function createMakerGame() {
   console.log("createMakerGame called");
-  log("🎮 Create Game & Swap button clicked!");
+  log("🎮 Create Game button clicked!");
   
   if (!signer) {
     log("❌ Please connect your wallet first");
@@ -853,13 +970,13 @@ async function createMakerGame() {
   
   log("✅ Wallet connected");
 
-  if (!routerContract || !hookContract) {
-    log("❌ Contracts not initialized. Initializing now...");
+  if (!rpsContract) {
+    log("❌ DegenRPS contract not initialized. Initializing now...");
     console.log("Initializing contracts...");
     try {
       await initializeContracts();
-      if (!routerContract || !hookContract) {
-        throw new Error("Contracts still not initialized after initialization attempt");
+      if (!rpsContract) {
+        throw new Error("DegenRPS contract still not initialized after initialization attempt");
       }
     } catch (error) {
       log(`❌ Failed to initialize contracts: ${error.message}`);
@@ -880,351 +997,268 @@ async function createMakerGame() {
     return;
   }
 
-  const direction = document.getElementById("makerSwapDirection")?.value || "token0ToToken1";
+  // Get token address from dropdown selector
+  const tokenSelect = document.getElementById("makerTokenSelect");
+  const tokenAddressInput = tokenSelect?.value || document.getElementById("makerTokenAddress")?.value || TOKEN0_ADDRESS;
   const amountInput = document.getElementById("makerSwapAmount")?.value;
 
-  log(`📋 Game creation details:`);
-  log(`   Move: ${gameState.move === null ? "Not selected" : gameState.move === 0 ? "Rock" : gameState.move === 1 ? "Paper" : "Scissors"}`);
-  log(`   Direction: ${direction}`);
-  log(`   Amount: ${amountInput || "Not entered"}`);
-
-  if (!amountInput || parseFloat(amountInput) <= 0) {
-    log("❌ Please enter a swap amount");
+  if (!tokenAddressInput || !ethers.isAddress(tokenAddressInput)) {
+    log("❌ Please select a token from the dropdown");
     return;
   }
 
-  if (gameState.move === null || gameState.move === undefined) {
-    log("❌ Please select your move first");
+  if (!amountInput || parseFloat(amountInput) <= 0) {
+    log("❌ Please enter a bet amount");
     return;
   }
 
   const btn = document.getElementById("makerCreateGameBtn");
   if (!btn) {
     log("❌ Create game button not found");
-    console.error("Button element not found");
     return;
   }
   
   const originalText = btn.innerHTML;
+  const originalDisabled = btn.disabled;
   btn.disabled = true;
   btn.innerHTML = "⏳ Creating...";
   
   log("🚀 Starting game creation process...");
 
   try {
+    // Initialize Noir if not already done
+    if (!noir || !backend) {
+      log("🔧 Initializing Noir...");
+      await initNoir();
+    }
+
     // Generate salt and commitment
     const salt = ethers.randomBytes(32);
     const saltField = ethers.hexlify(salt);
+    const moveValue = gameState.move; // 0=Rock, 1=Paper, 2=Scissors
     const commitment = ethers.keccak256(
-      ethers.solidityPacked(["uint8", "bytes32"], [gameState.move, saltField])
+      ethers.solidityPacked(["uint8", "bytes32"], [moveValue, saltField])
     );
-
-    // Validate commitment
-    if (!commitment || commitment === "0x" || commitment.length !== 66) {
-      throw new Error(`Invalid commitment generated: ${commitment}`);
-    }
 
     gameState.salt = saltField;
     gameState.commitment = commitment;
     gameState.commitmentHash = commitment;
-    
-    console.log("Generated commitment:", {
-      move: gameState.move,
-      salt: saltField,
-      commitment: commitment,
-      commitmentLength: commitment.length
-    });
-    gameState.isCommitted = true;
-    gameState.swapAmount = amountInput;
-    gameState.swapDirection = direction;
     gameState.role = "maker";
-
-    // Validate addresses
-    if (!TOKEN0_ADDRESS || !TOKEN1_ADDRESS || !HOOK_ADDRESS || !ROUTER_ADDRESS) {
-      throw new Error(`Missing contract addresses. TOKEN0: ${TOKEN0_ADDRESS}, TOKEN1: ${TOKEN1_ADDRESS}, HOOK: ${HOOK_ADDRESS}, ROUTER: ${ROUTER_ADDRESS}`);
-    }
-
-    // Prepare pool key
-    const zeroForOne = direction === "token0ToToken1";
-    const poolKey = {
-      currency0: TOKEN0_ADDRESS,
-      currency1: TOKEN1_ADDRESS,
-      fee: POOL_FEE,
-      tickSpacing: TICK_SPACING,
-      hooks: HOOK_ADDRESS
-    };
-
-    gameState.poolKey = poolKey;
+    
+    log(`📋 Game details:`);
+    log(`   Move: ${moveValue === 0 ? "Rock" : moveValue === 1 ? "Paper" : "Scissors"}`);
+    log(`   Token: ${tokenAddressInput}`);
+    log(`   Bet Amount: ${amountInput}`);
+    log(`   Commitment: ${commitment.slice(0, 10)}...`);
 
     // Get token contract and decimals
-    let tokenContract, decimals;
-    if (zeroForOne) {
-      if (!token0Contract) {
-        log("⚠️ Token0 contract not initialized, initializing now...");
-        await initializeContracts();
-        if (!token0Contract) {
-          throw new Error("Token0 contract not available. Please check deployments.json");
-        }
-      }
-      tokenContract = token0Contract;
-      decimals = await safeTokenCall(token0Contract, "decimals", 18);
-    } else {
-      if (!token1Contract) {
-        log("⚠️ Token1 contract not initialized, initializing now...");
-        await initializeContracts();
-        if (!token1Contract) {
-          throw new Error("Token1 contract not available. Please check deployments.json");
-        }
-      }
-      tokenContract = token1Contract;
-      decimals = await safeTokenCall(token1Contract, "decimals", 18);
+    // Ensure erc20ABI is available (use fallback if not initialized)
+    if (!erc20ABI) {
+      erc20ABI = [
+        "function approve(address spender, uint256 amount) external returns (bool)",
+        "function allowance(address owner, address spender) external view returns (uint256)",
+        "function balanceOf(address account) external view returns (uint256)",
+        "function decimals() external view returns (uint8)",
+        "function symbol() external view returns (string)"
+      ];
     }
-    
-    log(`✅ Using ${zeroForOne ? "Token0" : "Token1"} with ${decimals} decimals`);
-
-    const amountIn = ethers.parseUnits(amountInput, decimals);
-    const amountOutMin = 0; // Accept any output amount
+    const tokenContract = new ethers.Contract(tokenAddressInput, erc20ABI, signer);
+    const decimals = await safeTokenCall(tokenContract, "decimals", 18);
+    const betAmount = ethers.parseUnits(amountInput, decimals);
     const receiver = await signer.getAddress();
-    const deadline = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
-
-    log(`📋 Creating game with swap:`);
-    log(`   Amount: ${amountInput} tokens`);
-    log(`   Direction: ${direction}`);
-    log(`   Commitment: ${commitment.slice(0, 10)}...`);
-    log(`   Move: ${gameState.move === 0 ? "Rock" : gameState.move === 1 ? "Paper" : "Scissors"}`);
 
     // Check balance
     log("💰 Checking balance...");
     const balance = await safeTokenCallWithParam(tokenContract, "balanceOf", receiver, 0n);
-    if (balance < amountIn) {
-      const balanceFormatted = ethers.formatUnits(balance, decimals);
-      const amountFormatted = ethers.formatUnits(amountIn, decimals);
-      throw new Error(`Insufficient balance. You need ${amountFormatted}, but you have ${balanceFormatted}`);
+    if (balance < betAmount) {
+      throw new Error(`Insufficient balance. You need ${ethers.formatUnits(betAmount, decimals)}, but you have ${ethers.formatUnits(balance, decimals)}`);
     }
-    log(`✅ Balance check passed: ${ethers.formatUnits(balance, decimals)} tokens`);
+    log(`✅ Balance: ${ethers.formatUnits(balance, decimals)} tokens`);
 
-    // Check allowance
+    // Check allowance for DegenRPS contract
+    const DEGEN_RPS_ADDRESS = rpsContract.target;
     log("🔓 Checking token approval...");
-    const allowance = await safeTokenCallWithParam(tokenContract, "allowance", [receiver, ROUTER_ADDRESS], 0n);
-    if (allowance < amountIn) {
-      const allowanceFormatted = ethers.formatUnits(allowance, decimals);
-      const amountFormatted = ethers.formatUnits(amountIn, decimals);
-      throw new Error(`Insufficient allowance. You need ${amountFormatted}, but you have ${allowanceFormatted}. Please approve the token first.`);
+    const allowance = await safeTokenCallWithParam(tokenContract, "allowance", [receiver, DEGEN_RPS_ADDRESS], 0n);
+    if (allowance < betAmount) {
+      throw new Error(`Insufficient allowance. Please approve the token first.`);
     }
-    log(`✅ Approval check passed: ${ethers.formatUnits(allowance, decimals)} tokens approved`);
+    log(`✅ Approval: ${ethers.formatUnits(allowance, decimals)} tokens`);
 
-    // First, create game in RockPaperScissors contract
-    if (rpsContract) {
-      log("Creating game in RockPaperScissors contract...");
-      // Get timeout from input field (in minutes), default to 5 minutes
-      const timeoutMinutes = document.getElementById("makerTimeout")?.value || 5;
-      const timeoutSeconds = Number(timeoutMinutes) * 60; // Convert to seconds
-      gameState.timeout = timeoutSeconds;
-      log(`Using timeout: ${timeoutSeconds} seconds (${timeoutMinutes} minutes)`);
-      console.log("Calling createGame with:", { 
-        commitment: commitment, 
-        timeoutSeconds: timeoutSeconds,
-        commitmentType: typeof commitment,
-        timeoutType: typeof timeoutSeconds
-      });
+    // Generate ZK proof
+    // Note: The proof needs to be generated with the commitment. Since we don't know player2's move yet,
+    // we'll generate a proof with a placeholder move2. The proof will be verified at reveal time.
+    // However, the contract stores the proof from createGame, so we need a valid proof structure.
+    log("🔐 Generating ZK proof...");
+    
+    let proofBytes = "0x";
+    try {
+      // Generate proof using Noir - the proof should prove the commitment matches the move and salt
+      // We'll use a placeholder player2 move (0/Rock) since we don't know it yet
+      const placeholderPlayer2Move = 0;
+      // Calculate winner with placeholder (will be recalculated at reveal with actual moves)
+      // 0=Rock, 1=Paper, 2=Scissors
+      // Rock beats Scissors (0 beats 2), Paper beats Rock (1 beats 0), Scissors beats Paper (2 beats 1)
+      let placeholderWinner = 0; // Default to tie
+      if (moveValue === 0 && placeholderPlayer2Move === 2) placeholderWinner = 1; // Rock beats Scissors
+      else if (moveValue === 1 && placeholderPlayer2Move === 0) placeholderWinner = 1; // Paper beats Rock
+      else if (moveValue === 2 && placeholderPlayer2Move === 1) placeholderWinner = 1; // Scissors beats Paper
+      else if (placeholderPlayer2Move === 0 && moveValue === 2) placeholderWinner = 2; // Rock beats Scissors
+      else if (placeholderPlayer2Move === 1 && moveValue === 0) placeholderWinner = 2; // Paper beats Rock
+      else if (placeholderPlayer2Move === 2 && moveValue === 1) placeholderWinner = 2; // Scissors beats Paper
       
-      // Ensure timeout is a number
-      const timeoutNumber = Number(timeoutSeconds);
-      if (isNaN(timeoutNumber) || timeoutNumber <= 0) {
-        throw new Error(`Invalid timeout value: ${timeoutSeconds}`);
+      // The circuit expects: player1_move, player2_move, winner
+      // (salt and commitment are used for the commitment hash, but not needed in the proof inputs)
+      const inputs = {
+        player1_move: moveValue,
+        player2_move: placeholderPlayer2Move,
+        winner: placeholderWinner
+      };
+      
+      log(`Generating proof with inputs: player1_move=${moveValue}, player2_move=${placeholderPlayer2Move}, winner=${placeholderWinner}`);
+      
+      // Step 1: Execute circuit to get witness
+      let witness;
+      try {
+        const result = await noir.execute(inputs);
+        witness = result.witness;
+        log("✅ Witness computed successfully");
+      } catch (witnessError) {
+        log(`❌ Witness computation failed: ${witnessError.message}`);
+        throw new Error(`Witness computation failed: ${witnessError.message}`);
       }
       
-      const createGameTx = await rpsContract.createGame(commitment, timeoutNumber);
-      log(`RPS createGame transaction sent: ${createGameTx.hash}`);
-      const createGameReceipt = await createGameTx.wait();
+      // Step 2: Generate proof from witness
+      let proof;
+      try {
+        proof = await backend.generateProof(witness, { keccak: true });
+        log("✅ Proof generated successfully with Keccak256 hash");
+      } catch (proofError) {
+        log(`❌ Proof generation failed: ${proofError.message}`);
+        throw new Error(`Proof generation failed: ${proofError.message}`);
+      }
       
-      // Extract gameId from event
-      const gameCreatedEvent = createGameReceipt.logs.find((log) => {
-        try {
-          return log.topics && log.topics[0] === ethers.id("GameCreated(uint256,address,bytes32,uint256)");
-        } catch {
-          return false;
+      // Step 3: Serialize proof
+      try {
+        if (proof.proof && proof.proof instanceof Uint8Array) {
+          proofBytes = ethers.hexlify(proof.proof);
+          log("✅ Proof serialized from proof.proof (Uint8Array)");
+        } else if (backend.serializeProof) {
+          proofBytes = await backend.serializeProof(proof);
+          log("✅ Proof serialized using backend.serializeProof()");
+        } else {
+          // Try to serialize manually
+          proofBytes = ethers.hexlify(new Uint8Array(proof));
+          log("✅ Proof serialized manually");
         }
-      });
-
-      if (gameCreatedEvent) {
-        const parsed = rpsContract.interface.parseLog(gameCreatedEvent);
-        gameState.gameId = parsed.args.gameId.toString();
-        log(`✅ Game created in RockPaperScissors! Game ID: ${gameState.gameId}`);
-      } else {
-        log("⚠️ Could not extract gameId from event, but transaction succeeded");
+        
+        const proofLength = typeof proofBytes === "string"
+          ? (proofBytes.length - 2) / 2
+          : proofBytes.length;
+        log(`📏 Proof length: ${proofLength} bytes`);
+      } catch (serializeError) {
+        log(`❌ Proof serialization failed: ${serializeError.message}`);
+        throw serializeError;
       }
-    } else {
-      log("⚠️ RockPaperScissors contract not initialized. Game will only be created in hook.");
+      
+      log("✅ ZK proof generated (with placeholder move2)");
+    } catch (error) {
+      log(`❌ Proof generation failed: ${error.message}`);
+      log(`   Error details: ${error.stack || error}`);
+      console.error("Full proof generation error:", error);
+      throw new Error(`Proof generation failed: ${error.message}`);
     }
 
-    // Call router swap with commitment (this will trigger hook)
-    log("🚀 Executing swap with commitment...");
-    console.log("Swap parameters:", {
-      amountIn: amountIn.toString(),
-      amountOutMin: amountOutMin.toString(),
-      zeroForOne,
-      poolKey,
-      commitment,
-      receiver,
-      deadline
+    // Create game in DegenRPS contract
+    log("🎮 Creating game in DegenRPS contract...");
+    log("⏳ Waiting for MetaMask confirmation...");
+    
+    let createGameTx;
+    try {
+      createGameTx = await rpsContract.createGame(
+        tokenAddressInput,
+        betAmount,
+        commitment,
+        proofBytes
+      );
+      log(`📤 Transaction sent! Hash: ${createGameTx.hash}`);
+      log(`⏳ Waiting for transaction confirmation...`);
+    } catch (error) {
+      if (error.code === 4001 || error.message?.includes("user rejected") || error.message?.includes("User denied")) {
+        log("❌ Transaction rejected by user in MetaMask");
+        throw new Error("Transaction was rejected. Please try again.");
+      }
+      throw error;
+    }
+    
+    // Wait for transaction to be mined
+    let createGameReceipt;
+    try {
+      createGameReceipt = await createGameTx.wait();
+      log(`✅ Transaction confirmed in block ${createGameReceipt.blockNumber}`);
+      log(`🎉 SUCCESS! Your game has been created!`);
+    } catch (error) {
+      log(`❌ Transaction failed: ${error.message}`);
+      if (error.receipt) {
+        log(`   Block: ${error.receipt.blockNumber}`);
+      }
+      throw error;
+    }
+    
+    // Extract gameId from event
+    const gameCreatedEvent = createGameReceipt.logs.find((log) => {
+      try {
+        return log.topics && log.topics[0] === ethers.id("GameCreated(uint256,address,address,uint256,bytes32)");
+      } catch {
+        return false;
+      }
     });
-    
-    if (!routerContract) {
-      throw new Error("Router contract not initialized");
-    }
-    
-    const tx = await routerContract.swapExactTokensForTokensWithCommitment(
-      amountIn,
-      amountOutMin,
-      zeroForOne,
-      poolKey,
-      commitment,
-      "0x", // empty hookData
-      receiver,
-      deadline,
-      { value: 0 }
-    );
 
-    log(`Swap transaction sent: ${tx.hash}`);
-    console.log("Transaction hash:", tx.hash);
-    const receipt = await tx.wait();
-    log(`✅ Swap completed! Transaction confirmed in block ${receipt.blockNumber}`);
-    console.log("Transaction receipt:", receipt);
-    console.log("Number of logs:", receipt.logs.length);
-    console.log("Continuing with verification...");
-
-    // Check for Hook GameCreated event
-    console.log("Checking for GameCreated event...");
-    let hookGameCreatedEvent = null;
-    try {
-      const gameCreatedTopic = hookContract.interface.getEvent("GameCreated").topicHash;
-      console.log("GameCreated topic hash:", gameCreatedTopic);
-      hookGameCreatedEvent = receipt.logs.find((log) => {
-        return log.topics && log.topics[0] === gameCreatedTopic;
-      });
-    } catch (e) {
-      console.error("Error getting event topic, using fallback:", e);
-      // Fallback to manual topic hash
-      const fallbackTopic = ethers.id("GameCreated(bytes32,address,bytes32,address,uint256,uint256)");
-      console.log("Fallback topic hash:", fallbackTopic);
-      hookGameCreatedEvent = receipt.logs.find((log) => {
-        return log.topics && log.topics[0] === fallbackTopic;
-      });
-    }
-    console.log("GameCreated event found:", !!hookGameCreatedEvent);
-
-    if (hookGameCreatedEvent) {
-      log("✅ Hook GameCreated event detected");
-      try {
-        const parsed = hookContract.interface.parseLog(hookGameCreatedEvent);
-        log(`   Commitment: ${parsed.args.commitmentHash}`);
-        log(`   Player1: ${parsed.args.player1}`);
-        log(`   Contribution: ${ethers.formatUnits(parsed.args.contributionAmount, decimals)} tokens`);
-      } catch (e) {
-        console.error("Error parsing GameCreated event:", e);
-        log(`   Raw event topics: ${hookGameCreatedEvent.topics?.map(t => t.slice(0, 12)).join(", ")}`);
-      }
+    if (gameCreatedEvent) {
+      const parsed = rpsContract.interface.parseLog(gameCreatedEvent);
+      gameState.gameId = parsed.args.gameId.toString();
+      log(`✅ Game created! Game ID: ${gameState.gameId}`);
+      log(`   Player1: ${parsed.args.player1}`);
+      log(`   Token: ${parsed.args.token}`);
+      log(`   Bet Amount: ${ethers.formatUnits(parsed.args.betAmount, decimals)}`);
+      
+      // Show prominent success message
+      const successMsg = `🎉 Game #${gameState.gameId} created successfully!`;
+      log(successMsg);
+      log(`   Transaction: ${createGameTx.hash}`);
+      log(`   Block: ${createGameReceipt.blockNumber}`);
     } else {
-      log("⚠️ Hook GameCreated event NOT detected in swap transaction");
-      log(`   Total logs in receipt: ${receipt.logs.length}`);
-      log(`   Checking if hook address (${HOOK_ADDRESS}) matches any log addresses...`);
-      const hookLogs = receipt.logs.filter(log => log.address && log.address.toLowerCase() === HOOK_ADDRESS.toLowerCase());
-      log(`   Logs from hook: ${hookLogs.length}`);
-    }
-
-    // Verify the game was created in the hook
-    console.log("🔍 Verifying game was created in hook...");
-    log("🔍 Verifying game was created in hook...");
-    console.log("Commitment hash:", commitment);
-    console.log("Hook contract address:", HOOK_ADDRESS);
-    try {
-      console.log("Calling getPendingSwap...");
-      const swap = await hookContract.getPendingSwap(commitment);
-      console.log("Swap result:", swap);
-      if (swap && swap.player1 && swap.player1 !== "0x0000000000000000000000000000000000000000") {
-        log(`✅ Game verified in hook! Player1: ${swap.player1}`);
-        console.log(`✅ Game verified in hook! Player1: ${swap.player1}`);
-        log(`   Contribution: ${ethers.formatUnits(swap.player1Contribution, decimals)} tokens`);
-        log(`   Player2 moved: ${swap.player2Moved}`);
-        log(`   Resolved: ${swap.resolved}`);
-      } else {
-        log("❌ Game NOT found in hook! The swap may not have triggered the hook properly.");
-        console.log("❌ Game NOT found in hook! Swap result:", swap);
-        log("   This could mean:");
-        log("   - The commitment hash wasn't passed correctly");
-        log("   - The hook didn't process the swap");
-        log("   - The contribution amount was too small");
-      }
-    } catch (error) {
-      log(`❌ Error verifying game in hook: ${error.message}`);
-      console.error("Verification error:", error);
-      console.error("Error stack:", error.stack);
-    }
-
-    // Check if game appears in waiting list
-    console.log("Checking waiting list...");
-    try {
-      const waitingGames = await hookContract.getGamesWaitingForPlayer2();
-      console.log("Waiting games:", waitingGames);
-      console.log("Waiting games count:", waitingGames.length);
-      const isInList = waitingGames.some(hash => hash.toLowerCase() === commitment.toLowerCase());
-      console.log("Is in list:", isInList);
-      if (isInList) {
-        log(`✅ Game is in the waiting list (${waitingGames.length} total games waiting)`);
-        console.log(`✅ Game is in the waiting list (${waitingGames.length} total games waiting)`);
-      } else {
-        log(`⚠️ Game is NOT in the waiting list (${waitingGames.length} total games waiting)`);
-        console.log(`⚠️ Game is NOT in the waiting list (${waitingGames.length} total games waiting)`);
-        log(`   Commitment: ${commitment}`);
-        console.log(`   Commitment: ${commitment}`);
-        if (waitingGames.length > 0) {
-          log(`   Waiting games: ${waitingGames.map(h => h.slice(0, 10)).join(", ")}...`);
-          console.log(`   Waiting games:`, waitingGames);
-        }
-      }
-    } catch (error) {
-      log(`⚠️ Error checking waiting list: ${error.message}`);
-      console.error("Error checking waiting list:", error);
-      console.error("Error stack:", error.stack);
-    }
-
-    // Check if gameId is already linked in hook (hook may have auto-created it)
-    if (hookContract) {
+      log("⚠️ Could not extract gameId from event, but transaction succeeded");
+      // Try to get gameId from the contract
       try {
-        const gameIdFromHook = await hookContract.getGameId(commitment);
-        if (gameIdFromHook && gameIdFromHook.toString() !== "0") {
-          const hookGameId = gameIdFromHook.toString();
-          if (gameState.gameId && gameState.gameId !== hookGameId) {
-            log(`⚠️ Warning: Frontend gameId (${gameState.gameId}) differs from hook gameId (${hookGameId}). Using hook's gameId.`);
-          }
-          gameState.gameId = hookGameId;
-          log(`✅ GameId ${gameState.gameId} already linked in hook (hook auto-created the game)`);
-        } else if (gameState.gameId) {
-          // GameId exists from frontend but not linked in hook - try to link it
-          try {
-            log("Linking gameId to commitmentHash in hook...");
-            const linkTx = await hookContract.linkGameId(commitment, gameState.gameId);
-            log(`Link transaction sent: ${linkTx.hash}`);
-            await linkTx.wait();
-            log(`✅ GameId linked to commitmentHash in hook`);
-          } catch (error) {
-            // If linking fails, it might be because the game doesn't match or already exists
-            log(`⚠️ Warning: Could not link gameId: ${error.message}`);
-            log(`   The hook may create the game automatically on the next swap.`);
-            // Don't fail the whole flow if linking fails
-          }
-        }
-      } catch (error) {
-        log(`⚠️ Could not check/get gameId from hook: ${error.message}`);
-        // Don't fail the whole flow if this fails
+        const nextGameId = await rpsContract.nextGameId();
+        gameState.gameId = (nextGameId - 1n).toString();
+        log(`✅ Game ID (from nextGameId): ${gameState.gameId}`);
+        log(`🎉 Game #${gameState.gameId} created successfully!`);
+        log(`   Transaction: ${createGameTx.hash}`);
+        log(`   Block: ${createGameReceipt.blockNumber}`);
+      } catch (e) {
+        log("⚠️ Could not determine game ID");
+        log(`   Transaction: ${createGameTx.hash}`);
+        log(`   Block: ${createGameReceipt.blockNumber}`);
       }
     }
 
-    gameState.role = "maker";
+    gameState.isCommitted = true;
+    gameState.betAmount = amountInput;
+    gameState.tokenAddress = tokenAddressInput;
     
-    // Save game to localStorage
-    saveMakerGame(commitment, gameState.gameId, amountInput, direction, gameState.timeout, gameState.salt, gameState.move);
+    // Save to localStorage for tracking (needed for reveal - stores salt and move)
+    if (gameState.gameId && gameState.commitment) {
+      saveMakerGame(
+        gameState.commitment,
+        gameState.gameId,
+        amountInput,
+        null, // swapDirection not used in DegenRPS
+        null, // timeout not used
+        gameState.salt,
+        moveValue
+      );
+    }
     
     // Refresh maker's games list
     await loadMakerGames();
@@ -1245,28 +1279,45 @@ async function createMakerGame() {
     });
     updateMakerMoveStatus();
     updateMakerButtonStates();
+    
+    // Show success notification
+    btn.innerHTML = "✅ Game Created!";
+    btn.classList.add("bg-green-600");
+    setTimeout(() => {
+      btn.innerHTML = originalText;
+      btn.classList.remove("bg-green-600");
+      btn.disabled = originalDisabled;
+    }, 3000);
   } catch (error) {
     log(`❌ Error creating game: ${error.message}`);
     console.error("Full error:", error);
     console.error("Error stack:", error.stack);
-    if (error.reason) {
-      log(`Error reason: ${error.reason}`);
+    
+    // Provide more specific error messages
+    if (error.code === 4001 || error.message?.includes("user rejected") || error.message?.includes("User denied")) {
+      log(`❌ Transaction was rejected in MetaMask. Please approve the transaction to create the game.`);
+    } else if (error.reason) {
+      log(`❌ Error reason: ${error.reason}`);
+    } else if (error.message) {
+      log(`❌ Error: ${error.message}`);
     }
+    
     if (error.data) {
-      log(`Error data: ${JSON.stringify(error.data)}`);
+      log(`   Error data: ${JSON.stringify(error.data)}`);
     }
     if (error.code) {
-      log(`Error code: ${error.code}`);
+      log(`   Error code: ${error.code}`);
     }
     if (error.transaction) {
-      console.error("Error transaction:", error.transaction);
+      log(`   Transaction: ${JSON.stringify(error.transaction)}`);
     }
-  } finally {
-    const btn = document.getElementById("makerCreateGameBtn");
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = originalText;
+    if (error.transactionHash) {
+      log(`   Transaction hash: ${error.transactionHash}`);
     }
+    
+    // Restore button state on error
+    btn.disabled = originalDisabled;
+    btn.innerHTML = originalText;
   }
 }
 
@@ -1350,14 +1401,19 @@ function clearTakerGames() {
 }
 
 // Load active games (for Player 2)
+// Wrapper function for loading taker available games
+async function loadTakerAvailableGames() {
+  await loadActiveGames();
+}
+
 async function loadActiveGames() {
   if (!signer) {
     log("❌ Please connect your wallet first");
     return;
   }
 
-  if (!hookContract) {
-    log("❌ Hook contract not initialized. Initializing now...");
+  if (!rpsContract) {
+    log("❌ DegenRPS contract not initialized. Initializing now...");
     try {
       await initializeContracts();
     } catch (error) {
@@ -1366,18 +1422,17 @@ async function loadActiveGames() {
     }
   }
 
-  if (!hookContract) {
-    log("❌ Hook contract still not initialized. Please check deployments.json");
-    console.error("HOOK_ADDRESS:", HOOK_ADDRESS);
+  if (!rpsContract) {
+    log("❌ DegenRPS contract still not initialized. Please check deployments.json");
     return;
   }
 
   try {
     log("Loading active games...");
-    console.log("Calling getGamesWaitingForPlayer2 on hook at:", HOOK_ADDRESS);
-    const activeGameHashes = await hookContract.getGamesWaitingForPlayer2();
-    console.log("Active game hashes received:", activeGameHashes);
-    console.log("Number of games:", activeGameHashes.length);
+    console.log("Calling getGamesWaitingForPlayer2 on DegenRPS at:", rpsContract.target);
+    const activeGameIds = await rpsContract.getGamesWaitingForPlayer2();
+    console.log("Active game IDs received:", activeGameIds);
+    console.log("Number of games:", activeGameIds.length);
     
     const gamesListDiv = document.getElementById("takerAvailableGamesList");
     if (!gamesListDiv) {
@@ -1385,7 +1440,7 @@ async function loadActiveGames() {
       return;
     }
 
-    if (!activeGameHashes || activeGameHashes.length === 0) {
+    if (!activeGameIds || activeGameIds.length === 0) {
       log("ℹ️ No active games waiting for Player 2");
       gamesListDiv.innerHTML = `
         <div class="bg-gray-50 border-2 border-gray-200 rounded-xl p-4">
@@ -1396,23 +1451,20 @@ async function loadActiveGames() {
       return;
     }
 
-    log(`✅ Found ${activeGameHashes.length} game(s) waiting for Player 2`);
+    log(`✅ Found ${activeGameIds.length} game(s) waiting for Player 2`);
 
     // Fetch details for each game
-    log(`Fetching details for ${activeGameHashes.length} game(s)...`);
-    const gamePromises = activeGameHashes.map(async (commitmentHash) => {
+    log(`Fetching details for ${activeGameIds.length} game(s)...`);
+    const gamePromises = activeGameIds.map(async (gameId) => {
       try {
-        if (!commitmentHash || commitmentHash === "0x0000000000000000000000000000000000000000000000000000000000000000") {
-          log(`⚠️ Skipping invalid commitment hash: ${commitmentHash}`);
-          return null;
-        }
-        console.log(`Fetching swap details for commitment: ${commitmentHash}`);
-        const swap = await hookContract.getPendingSwap(commitmentHash);
-        console.log(`Swap details for ${commitmentHash.slice(0, 10)}...:`, swap);
-        return { commitmentHash, swap };
+        const gameIdNum = typeof gameId === "bigint" ? gameId.toString() : gameId.toString();
+        console.log(`Fetching game details for gameId: ${gameIdNum}`);
+        const game = await rpsContract.getGame(gameIdNum);
+        console.log(`Game details for ${gameIdNum}:`, game);
+        return { gameId: gameIdNum, game };
       } catch (error) {
-        log(`⚠️ Error fetching game ${commitmentHash?.slice(0, 10) || "unknown"}...: ${error.message}`);
-        console.error("Error fetching swap:", error);
+        log(`⚠️ Error fetching game ${gameId}...: ${error.message}`);
+        console.error("Error fetching game:", error);
         return null;
       }
     });
@@ -1431,121 +1483,64 @@ async function loadActiveGames() {
       return;
     }
 
-    // Display games - need to get token decimals first
-    const gamePromisesWithDecimals = games.map(async ({ commitmentHash, swap }) => {
-      // Handle currency - it might be an address string or a Currency type
-      let currencyAddress;
-      if (typeof swap.currency === 'string') {
-        currencyAddress = swap.currency;
-      } else if (swap.currency && typeof swap.currency === 'object' && swap.currency.target) {
-        // Currency type from Uniswap V4
-        currencyAddress = swap.currency.target;
-      } else {
-        log(`⚠️ Unknown currency format for game ${commitmentHash.slice(0, 10)}...`);
-        currencyAddress = swap.currency;
+    // Display games - get token decimals for each
+    const gamePromisesWithDecimals = games.map(async ({ gameId, game }) => {
+      // Handle both array and object responses
+      const tokenAddress = Array.isArray(game) ? game[2] : game.token;
+      const betAmount = Array.isArray(game) ? game[3] : game.betAmount;
+      const player1 = Array.isArray(game) ? game[0] : game.player1;
+      const createdAt = Array.isArray(game) ? game[9] : game.createdAt;
+      
+      // Get token contract and decimals
+      // Ensure erc20ABI is available
+      if (!erc20ABI) {
+        erc20ABI = [
+          "function balanceOf(address account) external view returns (uint256)",
+          "function decimals() external view returns (uint8)",
+          "function symbol() external view returns (string)"
+        ];
       }
-      
-      console.log(`Game ${commitmentHash.slice(0, 10)}... currency:`, currencyAddress, "TOKEN0:", TOKEN0_ADDRESS);
-      
-      const isToken0 = currencyAddress && TOKEN0_ADDRESS && 
-                       currencyAddress.toLowerCase() === TOKEN0_ADDRESS.toLowerCase();
-      const oppositeDirection = isToken0 ? "token1ToToken0" : "token0ToToken1";
-      
-      // Get decimals for the currency
-      let decimals = 18; // default
-      if (isToken0) {
-        decimals = await safeTokenCall(token1Contract, "decimals", 18); // Opposite token
-      } else {
-        decimals = await safeTokenCall(token0Contract, "decimals", 18); // Opposite token
-      }
-      
-      const player1Contribution = ethers.formatUnits(swap.player1Contribution, decimals);
-      
-      // Calculate timeout - get REFUND_TIMEOUT from hook (defaults to 30 minutes = 1800 seconds)
-      let refundTimeout = 1800; // default: 30 minutes
-      try {
-        if (hookContract) {
-          refundTimeout = Number(await hookContract.REFUND_TIMEOUT());
-        }
-      } catch (error) {
-        console.warn("Could not get REFUND_TIMEOUT from hook, using default 30 minutes (1800 seconds)");
-      }
-      
-      // Calculate time remaining
-      const now = Math.floor(Date.now() / 1000);
-      const gameTimestamp = Number(swap.timestamp);
-      const expiryTime = gameTimestamp + refundTimeout;
-      const timeRemaining = expiryTime - now;
-      const isExpired = timeRemaining <= 0;
-      
-      // Format time remaining
-      let timeRemainingText = "";
-      if (isExpired) {
-        const expiredSeconds = Math.abs(timeRemaining);
-        const expiredMinutes = Math.floor(expiredSeconds / 60);
-        const expiredSecs = expiredSeconds % 60;
-        timeRemainingText = `Expired ${expiredMinutes}:${expiredSecs.toString().padStart(2, "0")} ago`;
-      } else {
-        const minutes = Math.floor(timeRemaining / 60);
-        const seconds = timeRemaining % 60;
-        timeRemainingText = `${minutes}:${seconds.toString().padStart(2, "0")} remaining`;
-      }
+      const tokenContract = new ethers.Contract(tokenAddress, erc20ABI, signer);
+      const decimals = await safeTokenCall(tokenContract, "decimals", 18);
+      const betAmountFormatted = ethers.formatUnits(betAmount, decimals);
       
       return {
-        commitmentHash,
-        swap,
-        player1Contribution,
-        oppositeDirection,
-        contributionAmount: swap.player1Contribution.toString(),
-        currencyAddress,
-        timeRemaining,
-        timeRemainingText,
-        isExpired
+        gameId,
+        tokenAddress,
+        betAmount,
+        betAmountFormatted,
+        player1,
+        createdAt: Number(createdAt),
+        decimals
       };
     });
 
     const gamesWithDetails = await Promise.all(gamePromisesWithDecimals);
     console.log("Games with details:", gamesWithDetails);
 
-    // Store games data for real-time updates
-    activeGamesData = gamesWithDetails.map(({ commitmentHash, swap, timeRemaining, isExpired }) => ({
-      commitmentHash,
-      timestamp: Number(swap.timestamp),
-      timeRemaining,
-      isExpired,
-      gameId: `game-${commitmentHash.slice(2, 10)}`
-    }));
-
     log(`✅ Displaying ${gamesWithDetails.length} game(s)`);
 
     // Display games
-    gamesListDiv.innerHTML = gamesWithDetails.map(({ commitmentHash, player1Contribution, oppositeDirection, contributionAmount, swap, timeRemainingText, isExpired }) => {
-      const requiredToken = oppositeDirection === "token0ToToken1" ? "Token0" : "Token1";
-      const gameId = `game-${commitmentHash.slice(2, 10)}`;
-      const borderColor = isExpired ? "border-red-300" : "border-purple-200";
-      const bgColor = isExpired ? "bg-red-50" : "bg-white";
+    gamesListDiv.innerHTML = gamesWithDetails.map(({ gameId, tokenAddress, betAmountFormatted, player1, createdAt }) => {
+      const gameIdDisplay = `game-${gameId}`;
       return `
-        <div class="${bgColor} border-2 ${borderColor} rounded-xl p-4 mb-4" id="${gameId}">
+        <div class="bg-white border-2 border-purple-200 rounded-xl p-4 mb-4" id="${gameIdDisplay}">
           <div class="flex flex-col gap-3">
             <div class="flex justify-between items-center">
-              <span class="text-sm font-semibold text-gray-700">Game:</span>
-              <span class="text-xs font-mono text-purple-600">${commitmentHash.slice(0, 10)}...${commitmentHash.slice(-8)}</span>
+              <span class="text-sm font-semibold text-gray-700">Game ID:</span>
+              <span class="text-xs font-mono text-purple-600">${gameId}</span>
             </div>
             <div class="flex justify-between items-center">
-              <span class="text-sm text-gray-600">Maker's Contribution:</span>
-              <span class="text-sm font-semibold">${player1Contribution}</span>
+              <span class="text-sm text-gray-600">Player1:</span>
+              <span class="text-xs font-mono text-gray-700">${player1.slice(0, 6)}...${player1.slice(-4)}</span>
             </div>
             <div class="flex justify-between items-center">
-              <span class="text-sm text-gray-600">Required Swap:</span>
-              <span class="text-sm font-semibold">${oppositeDirection === "token0ToToken1" ? "Token0 → Token1" : "Token1 → Token0"}</span>
+              <span class="text-sm text-gray-600">Bet Amount:</span>
+              <span class="text-sm font-semibold">${betAmountFormatted} tokens</span>
             </div>
             <div class="flex justify-between items-center">
-              <span class="text-sm text-gray-600">You Need:</span>
-              <span class="text-sm font-semibold text-purple-600">${player1Contribution} ${requiredToken}</span>
-            </div>
-            <div class="flex justify-between items-center">
-              <span class="text-sm ${isExpired ? 'text-red-600 font-bold' : 'text-orange-600'}">${isExpired ? '⏰ Join Deadline Expired' : '⏳ Join Deadline'}:</span>
-              <span class="text-sm font-semibold ${isExpired ? 'text-red-600' : 'text-orange-600'}" id="${gameId}-time-remaining">${timeRemainingText}</span>
+              <span class="text-sm text-gray-600">Token:</span>
+              <span class="text-xs font-mono text-gray-700">${tokenAddress.slice(0, 6)}...${tokenAddress.slice(-4)}</span>
             </div>
             
             <!-- Move Selection for this game -->
@@ -1554,34 +1549,31 @@ async function loadActiveGames() {
               <div class="flex gap-2 mb-3">
                 <button 
                   class="move-btn rock-btn px-3 py-1.5 text-white text-xs font-semibold rounded-lg shadow"
-                  onclick="selectMoveForGame('${gameId}', 0, '${commitmentHash}', '${oppositeDirection}', '${contributionAmount}')"
+                  onclick="selectMoveForGame('${gameIdDisplay}', 0, '${gameId}')"
                 >
                   🪨 Rock
                 </button>
                 <button 
                   class="move-btn paper-btn px-3 py-1.5 text-white text-xs font-semibold rounded-lg shadow"
-                  onclick="selectMoveForGame('${gameId}', 1, '${commitmentHash}', '${oppositeDirection}', '${contributionAmount}')"
+                  onclick="selectMoveForGame('${gameIdDisplay}', 1, '${gameId}')"
                 >
                   📄 Paper
                 </button>
                 <button 
                   class="move-btn scissors-btn px-3 py-1.5 text-white text-xs font-semibold rounded-lg shadow"
-                  onclick="selectMoveForGame('${gameId}', 2, '${commitmentHash}', '${oppositeDirection}', '${contributionAmount}')"
-                data-move="2"
+                  onclick="selectMoveForGame('${gameIdDisplay}', 2, '${gameId}')"
                 >
                   ✂️ Scissors
                 </button>
               </div>
-              <div id="${gameId}-move-status" class="text-xs text-gray-500 mb-2"></div>
+              <div id="${gameIdDisplay}-move-status" class="text-xs text-gray-500 mb-2"></div>
               <button 
-                id="${gameId}-join-btn"
-                class="w-full px-4 py-2 ${isExpired ? 'bg-red-300 text-red-700 cursor-not-allowed' : 'bg-gray-300 text-gray-600 cursor-not-allowed'} font-semibold rounded-lg"
-                ${isExpired ? 'disabled' : 'disabled'}
-                data-commitment="${commitmentHash}"
-                data-direction="${oppositeDirection}"
-                data-amount="${contributionAmount}"
+                id="${gameIdDisplay}-join-btn"
+                class="w-full px-4 py-2 bg-gray-300 text-gray-600 cursor-not-allowed font-semibold rounded-lg"
+                disabled
+                data-game-id="${gameId}"
               >
-                ${isExpired ? '⏰ Game Expired' : '🎮 Join This Game'}
+                🎮 Join This Game
               </button>
             </div>
           </div>
@@ -1592,10 +1584,10 @@ async function loadActiveGames() {
     log(`✅ Loaded ${gamesWithDetails.length} active game(s)`);
     
     // Attach event listeners to join buttons
-    gamesWithDetails.forEach(({ commitmentHash, isExpired }) => {
-      const gameId = `game-${commitmentHash.slice(2, 10)}`;
-      const joinBtn = document.getElementById(`${gameId}-join-btn`);
-      if (joinBtn && !isExpired) {
+    gamesWithDetails.forEach(({ gameId }) => {
+      const gameIdDisplay = `game-${gameId}`;
+      const joinBtn = document.getElementById(`${gameIdDisplay}-join-btn`);
+      if (joinBtn) {
         // Remove any existing listeners by cloning the button
         const newBtn = joinBtn.cloneNode(true);
         joinBtn.parentNode.replaceChild(newBtn, joinBtn);
@@ -1603,10 +1595,13 @@ async function loadActiveGames() {
         // Add click event listener
         newBtn.addEventListener('click', function() {
           if (!this.disabled) {
-            const commitment = this.getAttribute('data-commitment');
-            const direction = this.getAttribute('data-direction');
-            const amount = this.getAttribute('data-amount');
-            joinGame(commitment, direction, amount);
+            const gameIdNum = this.getAttribute('data-game-id');
+            const selectedMove = selectedMovesByGame[gameIdDisplay];
+            if (selectedMove !== undefined) {
+              joinGame(gameIdNum, selectedMove);
+            } else {
+              log("❌ Please select a move first");
+            }
           }
         });
       }
@@ -2061,7 +2056,7 @@ async function loadAllTakerGames() {
 
 // Load Maker games
 async function loadMakerGames() {
-  if (!signer || !hookContract || !rpsContract) {
+  if (!signer || !rpsContract) {
     const gamesListDiv = document.getElementById("makerGamesList");
     if (gamesListDiv) {
       gamesListDiv.innerHTML = `
@@ -2075,12 +2070,17 @@ async function loadMakerGames() {
 
   try {
     const userAddress = await signer.getAddress();
-    const trackedGames = getMakerGames();
     const gamesListDiv = document.getElementById("makerGamesList");
     
     if (!gamesListDiv) return;
 
-    if (!trackedGames || Object.keys(trackedGames).length === 0) {
+    log("📋 Loading maker games from contract...");
+    
+    // Get nextGameId to know how many games exist
+    const nextGameId = await rpsContract.nextGameId();
+    const nextGameIdNum = Number(nextGameId);
+    
+    if (nextGameIdNum === 0) {
       gamesListDiv.innerHTML = `
         <div class="bg-gray-50 border-2 border-gray-200 rounded-xl p-4">
           <p class="text-sm text-gray-600 text-center">No games created yet. Create your first game above!</p>
@@ -2089,76 +2089,49 @@ async function loadMakerGames() {
       return;
     }
 
+    log(`Checking ${nextGameIdNum} game(s) for games created by ${userAddress}...`);
+    
     const makerGames = [];
     
-    // Check each tracked game
-    for (const [key, gameData] of Object.entries(trackedGames)) {
+    // Query all games and filter for ones where user is player1
+    // Start from gameId 1 (gameId 0 doesn't exist)
+    for (let gameId = 1; gameId < nextGameIdNum; gameId++) {
       try {
-        if (!gameData.commitmentHash) continue;
+        const game = await rpsContract.getGame(gameId);
         
-        // Get swap info from hook
-        let swap = null;
-        try {
-          swap = await hookContract.getPendingSwap(gameData.commitmentHash);
-        } catch (error) {
-          console.error(`Error fetching swap for ${gameData.commitmentHash}:`, error);
-        }
+        // Handle both array and object responses
+        const isArray = Array.isArray(game) || (typeof game === "object" && game !== null && game.length !== undefined);
+        const player1 = isArray ? game[0] : game.player1;
         
-        // Get game info from RPS contract if we have a gameId
-        let game = null;
-        let gameId = gameData.gameId;
-        if (!gameId && rpsContract) {
-          try {
-            gameId = await hookContract.getGameId(gameData.commitmentHash);
-            if (gameId && gameId.toString() !== "0") {
-              gameId = gameId.toString();
-            }
-          } catch (error) {
-            console.error(`Error getting gameId:`, error);
-          }
-        }
-        
-        if (gameId && gameId !== "0" && rpsContract) {
-          try {
-            game = await rpsContract.getGame(gameId);
-          } catch (error) {
-            console.error(`Error fetching game ${gameId}:`, error);
-          }
-        }
-        
-        const isArray = game && (Array.isArray(game) || (typeof game === "object" && game !== null && game.length !== undefined));
-        const status = game ? (isArray ? game[3] : game.status) : null;
-        const player1 = game ? (isArray ? game[1] : game.player1) : null;
-        const statusNum = status !== null ? Number(status) : null;
-        
-        // Check if user is player1 (maker) - either from RPS contract or from hook swap
-        const swapPlayer1 = swap && swap.player1 ? swap.player1 : null;
-        const isPlayer1 = (player1 && player1.toLowerCase() === userAddress.toLowerCase()) ||
-                         (swapPlayer1 && swapPlayer1.toLowerCase() === userAddress.toLowerCase());
-        
-        // Only show games where user is player1 (maker)
-        if (isPlayer1) {
-          const player2 = game ? (isArray ? game[2] : game.player2) : null;
-          const player2Move = game ? (isArray ? game[6] : game.player2Move) : null;
-          const revealDeadline = game ? (isArray ? game[10] : game.revealDeadline) : null;
-          const winner = game ? (isArray ? game[7] : game.winner) : null;
+        // Check if user is player1 (maker)
+        if (player1 && player1.toLowerCase() === userAddress.toLowerCase()) {
+          const state = isArray ? game[8] : game.state;
+          const player2 = isArray ? game[1] : game.player2;
+          const tokenAddress = isArray ? game[2] : game.token;
+          const betAmount = isArray ? game[3] : game.betAmount;
+          const player2Move = isArray ? game[6] : game.player2Move;
+          const revealDeadline = isArray ? game[10] : game.revealDeadline;
+          const winner = isArray ? game[11] : game.winner;
+          const createdAt = isArray ? game[9] : game.createdAt;
+          const commitment = isArray ? game[4] : game.commitment;
           
           makerGames.push({
-            commitmentHash: gameData.commitmentHash,
-            gameId: gameId || "N/A",
-            swapAmount: gameData.swapAmount,
-            swapDirection: gameData.swapDirection,
-            status: statusNum,
+            gameId: gameId.toString(),
+            betAmount: betAmount,
+            tokenAddress: tokenAddress,
+            state: Number(state),
             player2: player2,
             player2Move: player2Move !== null && player2Move !== undefined ? Number(player2Move) : null,
             revealDeadline: revealDeadline ? Number(revealDeadline) : null,
-            winner: winner !== null && winner !== undefined ? Number(winner) : null,
-            swap: swap,
-            timestamp: gameData.timestamp
+            winner: winner,
+            timestamp: createdAt ? Number(createdAt) : null,
+            commitment: commitment
           });
         }
       } catch (error) {
-        console.error(`Error checking game ${key}:`, error);
+        // Game might not exist (deleted or invalid ID), skip it
+        console.log(`Game ${gameId} not found or error:`, error.message);
+        continue;
       }
     }
 
@@ -2176,22 +2149,44 @@ async function loadMakerGames() {
 
     // Display maker games
     const moveNames = ["Rock 🪨", "Paper 📄", "Scissors ✂️"];
-    gamesListDiv.innerHTML = makerGames.map((game) => {
+    const gameHTMLs = await Promise.all(makerGames.map(async (game) => {
       let statusText = "Waiting for Player 2";
       let statusColor = "yellow";
       let actionButton = "";
       
-      if (game.status === null) {
-        statusText = "Pending";
+      // Get token decimals for display
+      let betAmountFormatted = "0";
+      if (game.tokenAddress && game.betAmount) {
+        try {
+          // Ensure erc20ABI is available
+          if (!erc20ABI) {
+            erc20ABI = [
+              "function balanceOf(address account) external view returns (uint256)",
+              "function decimals() external view returns (uint8)",
+              "function symbol() external view returns (string)"
+            ];
+          }
+          const tokenContract = new ethers.Contract(game.tokenAddress, erc20ABI, signer);
+          const decimals = await safeTokenCall(tokenContract, "decimals", 18);
+          betAmountFormatted = ethers.formatUnits(game.betAmount, decimals);
+        } catch (e) {
+          betAmountFormatted = game.betAmount.toString();
+        }
+      }
+      
+      // DegenRPS GameState: 0=WaitingForPlayer2, 1=WaitingForReveal, 2=Settled
+      if (game.state === null || game.state === undefined) {
+        statusText = "Unknown";
         statusColor = "gray";
-      } else if (game.status === 0 || game.status === 1) {
+      } else if (game.state === 0) {
         statusText = "Waiting for Player 2";
         statusColor = "yellow";
-      } else if (game.status === 2) {
+      } else if (game.state === 1) {
         statusText = "Waiting for Reveal";
         statusColor = "orange";
-        // Show reveal button
-        const player2MoveName = game.player2Move !== null ? moveNames[game.player2Move] : "Unknown";
+        // Convert player2Move from DegenRPS enum (1,2,3) to frontend (0,1,2)
+        const player2MoveFrontend = game.player2Move !== null && game.player2Move !== undefined ? game.player2Move - 1 : null;
+        const player2MoveName = player2MoveFrontend !== null ? moveNames[player2MoveFrontend] : "Unknown";
         actionButton = `
           <div class="mt-3 pt-3 border-t border-gray-200">
             <p class="text-xs text-gray-600 mb-2">Player 2's Move: ${player2MoveName}</p>
@@ -2203,13 +2198,24 @@ async function loadMakerGames() {
             </button>
           </div>
         `;
-      } else if (game.status === 3) {
-        statusText = "Completed";
+      } else if (game.state === 2) {
+        statusText = "Settled";
         statusColor = "green";
-        const winnerText = game.winner === 0 ? "Tie 🤝" : game.winner === 1 ? "You Won! 🎉" : "You Lost 😔";
+        const userAddress = await signer.getAddress();
+        const isWinner = game.winner && game.winner.toLowerCase() === userAddress.toLowerCase();
+        const isTie = !game.winner || game.winner === ethers.ZeroAddress;
+        const winnerText = isTie ? "Tie 🤝" : isWinner ? "You Won! 🎉" : "You Lost 😔";
         actionButton = `
           <div class="mt-3 pt-3 border-t border-gray-200">
-            <p class="text-sm font-semibold ${game.winner === 1 ? 'text-green-600' : game.winner === 2 ? 'text-red-600' : 'text-yellow-600'}">${winnerText}</p>
+            <p class="text-sm font-semibold ${isWinner ? 'text-green-600' : isTie ? 'text-yellow-600' : 'text-red-600'} mb-2">${winnerText}</p>
+            ${(isWinner || isTie) ? `
+              <button
+                onclick="withdrawPrize('${game.gameId}')"
+                class="w-full px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold rounded-lg hover:from-blue-700 hover:to-indigo-700 transform hover:scale-105 transition-all"
+              >
+                💰 Withdraw Prize
+              </button>
+            ` : ''}
           </div>
         `;
       }
@@ -2242,8 +2248,8 @@ async function loadMakerGames() {
               <span class="text-sm font-semibold text-${statusColor}-600">${statusText}</span>
             </div>
             <div class="flex justify-between items-center">
-              <span class="text-sm text-gray-600">Swap Amount:</span>
-              <span class="text-sm font-semibold">${game.swapAmount} ${game.swapDirection === "token0ToToken1" ? "Token0 → Token1" : "Token1 → Token0"}</span>
+              <span class="text-sm text-gray-600">Bet Amount:</span>
+              <span class="text-sm font-semibold">${betAmountFormatted} tokens</span>
             </div>
             ${game.player2 ? `
               <div class="flex justify-between items-center">
@@ -2261,7 +2267,9 @@ async function loadMakerGames() {
           </div>
         </div>
       `;
-    }).join("");
+    }));
+    
+    gamesListDiv.innerHTML = gameHTMLs.join("");
 
     log(`✅ Loaded ${makerGames.length} maker game(s)`);
   } catch (error) {
@@ -2317,27 +2325,25 @@ async function loadMakerGamesWithFeedback() {
 }
 
 // Select move for a specific game (Taker)
-window.selectMoveForGame = function(gameId, move, commitmentHash, oppositeDirection, contributionAmount) {
+window.selectMoveForGame = function(gameIdDisplay, move, gameId) {
   const moveNames = ["Rock 🪨", "Paper 📄", "Scissors ✂️"];
   
   // Update global move state
   gameState.move = move;
-  updateMoveStatus();
-  updateStepCheckmarks();
   
   // Track that this game has a move selected
-  selectedMovesByGame[gameId] = move;
+  selectedMovesByGame[gameIdDisplay] = move;
   
   // Update the specific game card UI
-  const moveStatusDiv = document.getElementById(`${gameId}-move-status`);
-  const joinBtn = document.getElementById(`${gameId}-join-btn`);
+  const moveStatusDiv = document.getElementById(`${gameIdDisplay}-move-status`);
+  const joinBtn = document.getElementById(`${gameIdDisplay}-join-btn`);
   
   if (moveStatusDiv) {
     moveStatusDiv.innerHTML = `<span class="text-green-600 font-semibold">✓ Selected: ${moveNames[move]}</span>`;
   }
   
   if (joinBtn) {
-    // Check if game is expired first
+    // Enable the join button
     const gameContainer = document.getElementById(gameId);
     const isExpired = gameContainer && gameContainer.classList.contains("bg-red-50");
     
@@ -2364,47 +2370,105 @@ window.selectMoveForGame = function(gameId, move, commitmentHash, oppositeDirect
   log(`✅ Move selected: ${moveNames[move]}`);
 };
 
-// Join game (Taker)
-window.joinGame = async function(commitmentHash, oppositeDirection, makerContributionAmount) {
-  console.log("joinGame called with:", { commitmentHash, oppositeDirection, makerContributionAmount });
+// Join game (Taker/Player2)
+window.joinGame = async function(gameId, move) {
+  console.log("joinGame called with:", { gameId, move });
   log("🎮 Join game button clicked!");
   
   if (!signer) {
     log("❌ Please connect your wallet first");
-    console.error("No signer available");
     return;
   }
 
-  if (!routerContract || !hookContract) {
-    log("❌ Contracts not initialized. Initializing now...");
-    console.log("Initializing contracts...");
+  if (!rpsContract) {
+    log("❌ DegenRPS contract not initialized. Initializing now...");
     try {
       await initializeContracts();
-      if (!routerContract || !hookContract) {
-        throw new Error("Contracts still not initialized after initialization attempt");
+      if (!rpsContract) {
+        throw new Error("DegenRPS contract still not initialized");
       }
     } catch (error) {
       log(`❌ Failed to initialize contracts: ${error.message}`);
-      console.error("Contract initialization error:", error);
       return;
     }
   }
 
-  if (gameState.move === null || gameState.move === undefined) {
+  // Move can be passed as parameter or from gameState
+  const player2Move = move !== null && move !== undefined ? move : gameState.move;
+  if (player2Move === null || player2Move === undefined) {
     log("❌ Please select your move first");
-    console.error("No move selected. gameState.move:", gameState.move);
     return;
   }
 
-  console.log("Move selected:", gameState.move);
-  console.log("Router contract:", routerContract ? "initialized" : "not initialized");
-  console.log("Hook contract:", hookContract ? "initialized" : "not initialized");
+  // Convert move to DegenRPS Move enum (Rock=1, Paper=2, Scissors=3)
+  // Our frontend uses 0=Rock, 1=Paper, 2=Scissors, but DegenRPS uses 1=Rock, 2=Paper, 3=Scissors
+  const moveEnum = player2Move + 1; // Convert 0,1,2 to 1,2,3
 
   const networkOk = await ensureCorrectNetwork();
   if (!networkOk) {
     log("❌ Please switch to the correct network");
     return;
   }
+
+  // Get game details to check bet amount and token
+  log("📋 Getting game details...");
+  const game = await rpsContract.getGame(gameId);
+  
+  // Handle both array and object responses
+  const tokenAddress = Array.isArray(game) ? game[2] : game.token;
+  const betAmount = Array.isArray(game) ? game[3] : game.betAmount;
+  const gameState_enum = Array.isArray(game) ? game[8] : game.state;
+  
+  // Check game state
+  if (gameState_enum !== 0) { // 0 = WaitingForPlayer2
+    log("❌ Game is not available to join");
+    return;
+  }
+
+  // Get token contract
+  // Ensure erc20ABI is available
+  if (!erc20ABI) {
+    erc20ABI = [
+      "function balanceOf(address account) external view returns (uint256)",
+      "function decimals() external view returns (uint8)",
+      "function symbol() external view returns (string)"
+    ];
+  }
+  const tokenContract = new ethers.Contract(tokenAddress, erc20ABI, signer);
+  const decimals = await safeTokenCall(tokenContract, "decimals", 18);
+  const userAddress = await signer.getAddress();
+  const DEGEN_RPS_ADDRESS = rpsContract.target;
+
+  // Check balance
+  log("💰 Checking balance...");
+  const balance = await safeTokenCallWithParam(tokenContract, "balanceOf", userAddress, 0n);
+  if (balance < betAmount) {
+    throw new Error(`Insufficient balance. You need ${ethers.formatUnits(betAmount, decimals)}, but you have ${ethers.formatUnits(balance, decimals)}`);
+  }
+  log(`✅ Balance: ${ethers.formatUnits(balance, decimals)} tokens`);
+
+  // Check allowance
+  log("🔓 Checking token approval...");
+  const allowance = await safeTokenCallWithParam(tokenContract, "allowance", [userAddress, DEGEN_RPS_ADDRESS], 0n);
+  if (allowance < betAmount) {
+    throw new Error(`Insufficient allowance. Please approve the token first.`);
+  }
+  log(`✅ Approval: ${ethers.formatUnits(allowance, decimals)} tokens`);
+
+  // Join the game
+  log("🎮 Joining game...");
+  log(`   Game ID: ${gameId}`);
+  log(`   Move: ${player2Move === 0 ? "Rock" : player2Move === 1 ? "Paper" : "Scissors"}`);
+  log(`   Bet Amount: ${ethers.formatUnits(betAmount, decimals)} tokens`);
+
+  const joinTx = await rpsContract.joinGame(gameId, moveEnum);
+  log(`📤 Transaction sent: ${joinTx.hash}`);
+  const joinReceipt = await joinTx.wait();
+  log(`✅ Transaction confirmed in block ${joinReceipt.blockNumber}`);
+  log(`✅ Successfully joined game ${gameId}!`);
+
+  // Refresh games list
+  await loadActiveGames();
 
   // Store button reference for error handling
   const gameIdForBtn = `game-${commitmentHash.slice(2, 10)}`;
@@ -3129,30 +3193,45 @@ async function revealMakerMove(gameId, commitmentHash) {
       throw serializeError;
     }
 
-    // Resolve game on RockPaperScissors contract with ZK proof
-    log(`Resolving game ${gameId} on RockPaperScissors contract...`);
+    // Convert move to DegenRPS enum (1=Rock, 2=Paper, 3=Scissors)
+    const moveEnum = makerMove + 1;
 
     try {
-      const gasEstimate = await rpsContract.resolveGame.estimateGas(
+      const gasEstimate = await rpsContract.revealAndSettle.estimateGas(
         gameId,
-        makerMove,
+        moveEnum,
         salt,
         proofBytes
       );
       log(`⛽ Gas estimate: ${gasEstimate.toString()}`);
 
-      const tx = await rpsContract.resolveGame(
+      const tx = await rpsContract.revealAndSettle(
         gameId,
-        makerMove,
+        moveEnum,
         salt,
         proofBytes,
         { gasLimit: gasEstimate * BigInt(2) }
       );
 
-      log(`Transaction sent: ${tx.hash}`);
+      log(`📤 Transaction sent: ${tx.hash}`);
       const receipt = await tx.wait();
-      log(`✅ Game resolved! Transaction confirmed in block ${receipt.blockNumber}`);
-      log(`🎉 Winner: ${winner === 0 ? "Tie" : winner === 1 ? "Maker" : "Taker"}`);
+      log(`✅ Game settled! Transaction confirmed in block ${receipt.blockNumber}`);
+      
+      // Get updated game state to see winner
+      const updatedGame = await rpsContract.getGame(gameId);
+      const gameWinner = Array.isArray(updatedGame) ? updatedGame[11] : updatedGame.winner;
+      const winnerAddress = gameWinner;
+      
+      if (winnerAddress === ethers.ZeroAddress) {
+        log(`🎉 Result: Tie! Both players can withdraw their bet.`);
+      } else {
+        const userAddress = await signer.getAddress();
+        if (winnerAddress.toLowerCase() === userAddress.toLowerCase()) {
+          log(`🎉 You won! You can withdraw the prize pool.`);
+        } else {
+          log(`😔 You lost. The winner can withdraw the prize pool.`);
+        }
+      }
 
       // Refresh maker's games list
       await loadMakerGames();
@@ -3179,6 +3258,28 @@ async function revealMakerMove(gameId, commitmentHash) {
 
 // Make revealMakerMove available globally for onclick handlers
 window.revealMakerMove = revealMakerMove;
+
+// Withdraw prize (for winners or ties)
+window.withdrawPrize = async function(gameId) {
+  if (!signer || !rpsContract) {
+    log("❌ Contracts not initialized");
+    return;
+  }
+
+  try {
+    log(`💰 Withdrawing prize for game ${gameId}...`);
+    const withdrawTx = await rpsContract.withdraw(gameId);
+    log(`📤 Transaction sent: ${withdrawTx.hash}`);
+    const receipt = await withdrawTx.wait();
+    log(`✅ Prize withdrawn! Transaction confirmed in block ${receipt.blockNumber}`);
+    
+    // Refresh games list
+    await loadMakerGames();
+  } catch (error) {
+    log(`❌ Error withdrawing prize: ${error.message}`);
+    console.error("Withdraw error:", error);
+  }
+};
 
 // Update game status display
 async function updateGameStatus() {
@@ -3449,7 +3550,7 @@ function setupEventListeners() {
 
   const makerCreateBtn = document.getElementById("makerCreateGameBtn");
   if (makerCreateBtn) {
-    makerCreateBtn.addEventListener("click", (e) => {
+    makerCreateBtn.addEventListener("click", async (e) => {
       e.preventDefault();
       e.stopPropagation();
       console.log("Maker create game button clicked!");
@@ -3458,14 +3559,32 @@ function setupEventListeners() {
       // Check if button is disabled
       if (makerCreateBtn.disabled) {
         console.warn("Button is disabled, cannot create game");
-        log("⚠️ Button is disabled. Please select a move and enter an amount first.");
+        const hasMove = gameState.move !== null && gameState.move !== undefined;
+        const amountInput = document.getElementById("makerSwapAmount")?.value;
+        const hasAmount = amountInput && parseFloat(amountInput) > 0;
+        const tokenSelect = document.getElementById("makerTokenSelect");
+        const tokenAddress = tokenSelect?.value || document.getElementById("makerTokenAddress")?.value;
+        const hasToken = tokenAddress && ethers.isAddress(tokenAddress);
+        
+        if (!hasMove) {
+          log("⚠️ Please select a move first (Rock, Paper, or Scissors)");
+        } else if (!hasToken) {
+          log("⚠️ Please select a token from the dropdown");
+        } else if (!hasAmount) {
+          log("⚠️ Please enter a bet amount");
+        } else {
+          log("⚠️ Button is disabled. Please check all requirements.");
+        }
         return;
       }
       
-      createMakerGame().catch(error => {
+      try {
+        await createMakerGame();
+      } catch (error) {
         console.error("Error in createMakerGame:", error);
         log(`❌ Unexpected error: ${error.message}`);
-      });
+        console.error("Full error:", error);
+      }
     });
     console.log("✅ Maker create button listener added");
   } else {
@@ -3509,18 +3628,7 @@ function setupEventListeners() {
     console.log("✅ Taker refresh button listener added");
   }
 
-  // Update on swap direction/amount change (maker view)
-  const makerSwapDirection = document.getElementById("makerSwapDirection");
-  if (makerSwapDirection) {
-    makerSwapDirection.addEventListener("change", async () => {
-      await updateMakerTokenBalance();
-      await checkMakerApproval();
-      updateMakerButtonStates();
-    });
-    console.log("✅ Maker swap direction listener added");
-  } else {
-    console.error("❌ Maker swap direction element not found");
-  }
+  // Note: Swap direction element removed - now using token dropdown instead
 
   const makerSwapAmount = document.getElementById("makerSwapAmount");
   if (makerSwapAmount) {
@@ -3534,6 +3642,26 @@ function setupEventListeners() {
     console.log("✅ Maker swap amount listener added");
   } else {
     console.error("❌ Maker swap amount element not found");
+  }
+
+  // Token dropdown selection
+  const makerTokenSelect = document.getElementById("makerTokenSelect");
+  if (makerTokenSelect) {
+    makerTokenSelect.addEventListener("change", async (e) => {
+      const selectedAddress = e.target.value;
+      // Update hidden input field
+      const hiddenInput = document.getElementById("makerTokenAddress");
+      if (hiddenInput) {
+        hiddenInput.value = selectedAddress;
+      }
+      // Update balance and approval status
+      await updateMakerTokenBalance();
+      await checkMakerApproval();
+      updateMakerButtonStates();
+    });
+    console.log("✅ Maker token select listener added");
+  } else {
+    console.error("❌ Maker token select element not found");
   }
   
   // Initial button state update

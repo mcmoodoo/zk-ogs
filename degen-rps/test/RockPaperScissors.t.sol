@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {RockPaperScissors} from "./RockPaperScissors.sol";
+import {RockPaperScissors} from "../src/RockPaperScissors.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract RockPaperScissorsTest is Test {

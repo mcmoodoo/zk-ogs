@@ -3,7 +3,7 @@
   "rpcUrl": "http://localhost:8545",
   "contracts": {
     "token0": {
-      "address": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+      "address": "0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0",
       "abi": [
         {
           "type": "constructor",
@@ -360,10 +360,10 @@
           "anonymous": false
         }
       ],
-      "blockNumber": 1
+      "blockNumber": 2
     },
     "token1": {
-      "address": "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512",
+      "address": "0xcf7ed3acca5a467e9e704c703e8d87f634fb0fc9",
       "abi": [
         {
           "type": "constructor",
@@ -2848,7 +2848,7 @@
       "blockNumber": 7
     },
     "verifier": {
-      "address": "0xb7f8bc63bbcad18155201308c8f3540b07f84f5e",
+      "address": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
       "abi": [
         {
           "type": "function",
@@ -2895,7 +2895,7 @@
           "inputs": []
         }
       ],
-      "blockNumber": 8
+      "blockNumber": 1
     },
     "rockPaperScissors": {
       "address": "0xa51c1fc2f0d1a1b8494ed1fe312d7c3a78ed91c0",
@@ -3367,6 +3367,567 @@
         }
       ],
       "blockNumber": 9
+    },
+    "degenRPS": {
+      "address": "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512",
+      "abi": [
+        {
+          "type": "constructor",
+          "inputs": [
+            {
+              "name": "_verifier",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "createGame",
+          "inputs": [
+            {
+              "name": "tokenAddress",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "betAmount",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "commitment",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "proof",
+              "type": "bytes",
+              "internalType": "bytes"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "games",
+          "inputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "player1",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "player2",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "token",
+              "type": "address",
+              "internalType": "contract IERC20"
+            },
+            {
+              "name": "betAmount",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "commitment",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "proof",
+              "type": "bytes",
+              "internalType": "bytes"
+            },
+            {
+              "name": "player2Move",
+              "type": "uint8",
+              "internalType": "enum DegenRPS.Move"
+            },
+            {
+              "name": "player1Move",
+              "type": "uint8",
+              "internalType": "enum DegenRPS.Move"
+            },
+            {
+              "name": "state",
+              "type": "uint8",
+              "internalType": "enum DegenRPS.GameState"
+            },
+            {
+              "name": "createdAt",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "revealDeadline",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "winner",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "getGame",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "tuple",
+              "internalType": "struct DegenRPS.Game",
+              "components": [
+                {
+                  "name": "player1",
+                  "type": "address",
+                  "internalType": "address"
+                },
+                {
+                  "name": "player2",
+                  "type": "address",
+                  "internalType": "address"
+                },
+                {
+                  "name": "token",
+                  "type": "address",
+                  "internalType": "contract IERC20"
+                },
+                {
+                  "name": "betAmount",
+                  "type": "uint256",
+                  "internalType": "uint256"
+                },
+                {
+                  "name": "commitment",
+                  "type": "bytes32",
+                  "internalType": "bytes32"
+                },
+                {
+                  "name": "proof",
+                  "type": "bytes",
+                  "internalType": "bytes"
+                },
+                {
+                  "name": "player2Move",
+                  "type": "uint8",
+                  "internalType": "enum DegenRPS.Move"
+                },
+                {
+                  "name": "player1Move",
+                  "type": "uint8",
+                  "internalType": "enum DegenRPS.Move"
+                },
+                {
+                  "name": "state",
+                  "type": "uint8",
+                  "internalType": "enum DegenRPS.GameState"
+                },
+                {
+                  "name": "createdAt",
+                  "type": "uint256",
+                  "internalType": "uint256"
+                },
+                {
+                  "name": "revealDeadline",
+                  "type": "uint256",
+                  "internalType": "uint256"
+                },
+                {
+                  "name": "winner",
+                  "type": "address",
+                  "internalType": "address"
+                }
+              ]
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "getGamesWaitingForPlayer2",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256[]",
+              "internalType": "uint256[]"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "joinGame",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "move",
+              "type": "uint8",
+              "internalType": "enum DegenRPS.Move"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "nextGameId",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "owner",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "refund",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "revealAndSettle",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "move",
+              "type": "uint8",
+              "internalType": "enum DegenRPS.Move"
+            },
+            {
+              "name": "salt",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "proof",
+              "type": "bytes",
+              "internalType": "bytes"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "revealTimeout",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "setRevealTimeout",
+          "inputs": [
+            {
+              "name": "_timeout",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "setVerifier",
+          "inputs": [
+            {
+              "name": "_verifier",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "usedCommitments",
+          "inputs": [
+            {
+              "name": "",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "bool",
+              "internalType": "bool"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "verifier",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "contract IVerifier"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "withdraw",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "event",
+          "name": "GameCreated",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "indexed": true,
+              "internalType": "uint256"
+            },
+            {
+              "name": "player1",
+              "type": "address",
+              "indexed": true,
+              "internalType": "address"
+            },
+            {
+              "name": "token",
+              "type": "address",
+              "indexed": true,
+              "internalType": "address"
+            },
+            {
+              "name": "betAmount",
+              "type": "uint256",
+              "indexed": false,
+              "internalType": "uint256"
+            },
+            {
+              "name": "commitment",
+              "type": "bytes32",
+              "indexed": false,
+              "internalType": "bytes32"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
+          "name": "GameRefunded",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "indexed": true,
+              "internalType": "uint256"
+            },
+            {
+              "name": "player",
+              "type": "address",
+              "indexed": true,
+              "internalType": "address"
+            },
+            {
+              "name": "amount",
+              "type": "uint256",
+              "indexed": false,
+              "internalType": "uint256"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
+          "name": "GameSettled",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "indexed": true,
+              "internalType": "uint256"
+            },
+            {
+              "name": "winner",
+              "type": "address",
+              "indexed": true,
+              "internalType": "address"
+            },
+            {
+              "name": "amount",
+              "type": "uint256",
+              "indexed": false,
+              "internalType": "uint256"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
+          "name": "MoveRevealed",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "indexed": true,
+              "internalType": "uint256"
+            },
+            {
+              "name": "player1",
+              "type": "address",
+              "indexed": true,
+              "internalType": "address"
+            },
+            {
+              "name": "move",
+              "type": "uint8",
+              "indexed": false,
+              "internalType": "enum DegenRPS.Move"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
+          "name": "Player2Joined",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "indexed": true,
+              "internalType": "uint256"
+            },
+            {
+              "name": "player2",
+              "type": "address",
+              "indexed": true,
+              "internalType": "address"
+            },
+            {
+              "name": "move",
+              "type": "uint8",
+              "indexed": false,
+              "internalType": "enum DegenRPS.Move"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
+          "name": "PrizeWithdrawn",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "indexed": true,
+              "internalType": "uint256"
+            },
+            {
+              "name": "winner",
+              "type": "address",
+              "indexed": true,
+              "internalType": "address"
+            },
+            {
+              "name": "amount",
+              "type": "uint256",
+              "indexed": false,
+              "internalType": "uint256"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "error",
+          "name": "SafeERC20FailedOperation",
+          "inputs": [
+            {
+              "name": "token",
+              "type": "address",
+              "internalType": "address"
+            }
+          ]
+        }
+      ],
+      "blockNumber": 2
     }
   }
 }
