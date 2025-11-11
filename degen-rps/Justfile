@@ -337,6 +337,339 @@ games-waiting:
     echo "📋 Games waiting for Player 2:"
     cast call "$DEGEN_RPS_ADDR" "getGamesWaitingForPlayer2()" --rpc-url {{default-rpc-url}}
 
+# Get games awaiting reveal with full details
+games-awaiting-reveal:
+    #!/usr/bin/env bash
+    set -e
+    
+    DEGEN_RPS_ADDR=$(just _get-address degenRPS)
+    if [ -z "$DEGEN_RPS_ADDR" ]; then
+        echo "❌ DegenRPS address not found. Run 'just deploy' first."
+        exit 1
+    fi
+    
+    echo "🔍 Fetching games awaiting reveal..."
+    echo ""
+    
+    # Get game IDs awaiting reveal
+    GAME_IDS=$(cast call "$DEGEN_RPS_ADDR" "getGamesWaitingForReveal()" --rpc-url {{default-rpc-url}} 2>/dev/null | sed 's/^\[\(.*\)\]$/\1/' | tr ',' ' ')
+    
+    if [ -z "$GAME_IDS" ] || [ "$GAME_IDS" = "()" ]; then
+        echo "📭 No games awaiting reveal."
+        exit 0
+    fi
+    
+    # Convert space-separated to array
+    GAME_IDS_ARRAY=($GAME_IDS)
+    
+    if [ ${#GAME_IDS_ARRAY[@]} -eq 0 ]; then
+        echo "📭 No games awaiting reveal."
+        exit 0
+    fi
+    
+    echo "📋 Found ${#GAME_IDS_ARRAY[@]} game(s) awaiting reveal:"
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════════════════════"
+    echo ""
+    
+    # Function to convert move enum to string
+    move_to_string() {
+        case "$1" in
+            0) echo "None" ;;
+            1) echo "Rock" ;;
+            2) echo "Paper" ;;
+            3) echo "Scissors" ;;
+            *) echo "Unknown($1)" ;;
+        esac
+    }
+    
+    # Function to format timestamp
+    format_timestamp() {
+        if [ "$1" = "0" ] || [ -z "$1" ]; then
+            echo "N/A"
+        else
+            # Convert hex to decimal if needed
+            TS=$(printf "%d" "$1" 2>/dev/null || echo "$1")
+            date -d "@$TS" 2>/dev/null || echo "$TS (unix timestamp)"
+        fi
+    }
+    
+    # Function to format address (shorten)
+    shorten_addr() {
+        echo "$1" | sed 's/\(0x[0-9a-fA-F]\{6\}\).*\([0-9a-fA-F]\{4\}\)/\1...\2/'
+    }
+    
+    # Function to format token amount (assuming 18 decimals)
+    format_amount() {
+        # Remove 0x prefix if present and convert hex to decimal
+        AMT=$(echo "$1" | sed 's/^0x//')
+        if [ -n "$AMT" ] && [ "$AMT" != "0" ]; then
+            # Use bc or python to divide by 10^18
+            python3 -c "print('{:.6f}'.format(int('$AMT', 16) / 10**18))" 2>/dev/null || echo "$AMT"
+        else
+            echo "0"
+        fi
+    }
+    
+    # Process each game
+    for GAME_ID in "${GAME_IDS_ARRAY[@]}"; do
+        # Clean up game ID (remove quotes, spaces, etc)
+        GAME_ID=$(echo "$GAME_ID" | tr -d '[:space:]"')
+        
+        if [ -z "$GAME_ID" ] || [ "$GAME_ID" = "()" ]; then
+            continue
+        fi
+        
+        echo "🎮 Game ID: $GAME_ID"
+        echo "───────────────────────────────────────────────────────────────────────────────"
+        
+        # Get game data - returns tuple: (player1, player2, token, betAmount, commitment, proof, player2Move, player1Move, state, createdAt, revealDeadline, winner)
+        GAME_DATA=$(cast call "$DEGEN_RPS_ADDR" "getGame(uint256)" "$GAME_ID" --rpc-url {{default-rpc-url}} 2>/dev/null)
+        
+        if [ -z "$GAME_DATA" ]; then
+            echo "  ⚠️  Could not fetch game data"
+            echo ""
+            continue
+        fi
+        
+        # Parse the tuple - use cast with --json for easier parsing
+        GAME_DATA_JSON=$(cast call "$DEGEN_RPS_ADDR" "getGame(uint256)" "$GAME_ID" --rpc-url {{default-rpc-url}} --json 2>/dev/null || echo "")
+        
+        if [ -n "$GAME_DATA_JSON" ] && echo "$GAME_DATA_JSON" | jq . >/dev/null 2>&1; then
+            # JSON format from cast --json
+            PLAYER1=$(echo "$GAME_DATA_JSON" | jq -r '.[0]')
+            PLAYER2=$(echo "$GAME_DATA_JSON" | jq -r '.[1]')
+            TOKEN=$(echo "$GAME_DATA_JSON" | jq -r '.[2]')
+            BET_AMOUNT=$(echo "$GAME_DATA_JSON" | jq -r '.[3]')
+            COMMITMENT=$(echo "$GAME_DATA_JSON" | jq -r '.[4]')
+            PLAYER2_MOVE=$(echo "$GAME_DATA_JSON" | jq -r '.[6]')
+            PLAYER1_MOVE=$(echo "$GAME_DATA_JSON" | jq -r '.[7]')
+            STATE=$(echo "$GAME_DATA_JSON" | jq -r '.[8]')
+            CREATED_AT=$(echo "$GAME_DATA_JSON" | jq -r '.[9]')
+            REVEAL_DEADLINE=$(echo "$GAME_DATA_JSON" | jq -r '.[10]')
+            WINNER=$(echo "$GAME_DATA_JSON" | jq -r '.[11]')
+        else
+            # Fallback: parse space-separated tuple format
+            GAME_DATA_CLEAN=$(echo "$GAME_DATA" | sed 's/^(\(.*\))$/\1/' | sed 's/^\[\(.*\)\]$/\1/')
+            read -r PLAYER1 PLAYER2 TOKEN BET_AMOUNT COMMITMENT _PROOF PLAYER2_MOVE PLAYER1_MOVE STATE CREATED_AT REVEAL_DEADLINE WINNER <<< "$GAME_DATA_CLEAN"
+        fi
+        
+        # Convert move enums
+        PLAYER2_MOVE_STR=$(move_to_string "$PLAYER2_MOVE")
+        PLAYER1_MOVE_STR=$(move_to_string "$PLAYER1_MOVE")
+        
+        # Format timestamps
+        CREATED_AT_STR=$(format_timestamp "$CREATED_AT")
+        REVEAL_DEADLINE_STR=$(format_timestamp "$REVEAL_DEADLINE")
+        
+        # Format bet amount
+        BET_AMOUNT_STR=$(format_amount "$BET_AMOUNT")
+        
+        # Get token symbol if possible
+        TOKEN_SYMBOL=$(cast call "$TOKEN" "symbol()" --rpc-url {{default-rpc-url}} 2>/dev/null || echo "TOKEN")
+        
+        echo "  👤 Player 1 (Maker):  $(shorten_addr "$PLAYER1")"
+        echo "  👤 Player 2 (Taker):  $(shorten_addr "$PLAYER2")"
+        echo "  🪙 Token:             $(shorten_addr "$TOKEN") ($TOKEN_SYMBOL)"
+        echo "  💰 Bet Amount:        $BET_AMOUNT_STR $TOKEN_SYMBOL"
+        echo "  🔒 Commitment:        $(shorten_addr "$COMMITMENT")"
+        echo "  ✊ Player 2 Move:     $PLAYER2_MOVE_STR"
+        echo "  ❓ Player 1 Move:     Hidden (awaiting reveal)"
+        echo "  📅 Created At:        $CREATED_AT_STR"
+        echo "  ⏰ Reveal Deadline:   $REVEAL_DEADLINE_STR"
+        echo ""
+    done
+    
+    echo "═══════════════════════════════════════════════════════════════════════════════"
+
+# Get settled games with outcomes and full details
+games-settled:
+    #!/usr/bin/env bash
+    set -e
+    
+    DEGEN_RPS_ADDR=$(just _get-address degenRPS)
+    if [ -z "$DEGEN_RPS_ADDR" ]; then
+        echo "❌ DegenRPS address not found. Run 'just deploy' first."
+        exit 1
+    fi
+    
+    echo "🔍 Fetching settled games..."
+    echo ""
+    
+    # Get next game ID to know how many games exist
+    NEXT_GAME_ID=$(cast call "$DEGEN_RPS_ADDR" "nextGameId()" --rpc-url {{default-rpc-url}} 2>/dev/null)
+    NEXT_GAME_ID=$(printf "%d" "$NEXT_GAME_ID" 2>/dev/null || echo "0")
+    
+    if [ "$NEXT_GAME_ID" = "0" ]; then
+        echo "📭 No games found."
+        exit 0
+    fi
+    
+    echo "📋 Checking games 0 to $((NEXT_GAME_ID - 1)) for settled games..."
+    echo ""
+    
+    # Function to convert move enum to string
+    move_to_string() {
+        case "$1" in
+            0) echo "None" ;;
+            1) echo "Rock" ;;
+            2) echo "Paper" ;;
+            3) echo "Scissors" ;;
+            *) echo "Unknown($1)" ;;
+        esac
+    }
+    
+    # Function to format timestamp
+    format_timestamp() {
+        if [ "$1" = "0" ] || [ -z "$1" ]; then
+            echo "N/A"
+        else
+            # Convert hex to decimal if needed
+            TS=$(printf "%d" "$1" 2>/dev/null || echo "$1")
+            date -d "@$TS" 2>/dev/null || echo "$TS (unix timestamp)"
+        fi
+    }
+    
+    # Function to format address (shorten)
+    shorten_addr() {
+        echo "$1" | sed 's/\(0x[0-9a-fA-F]\{6\}\).*\([0-9a-fA-F]\{4\}\)/\1...\2/'
+    }
+    
+    # Function to format token amount (assuming 18 decimals)
+    format_amount() {
+        # Remove 0x prefix if present and convert hex to decimal
+        AMT=$(echo "$1" | sed 's/^0x//')
+        if [ -n "$AMT" ] && [ "$AMT" != "0" ]; then
+            # Use python to divide by 10^18
+            python3 -c "print('{:.6f}'.format(int('$AMT', 16) / 10**18))" 2>/dev/null || echo "$AMT"
+        else
+            echo "0"
+        fi
+    }
+    
+    SETTLED_COUNT=0
+    
+    # Check each game
+    for ((i=0; i<NEXT_GAME_ID; i++)); do
+        # Get game data
+        GAME_DATA=$(cast call "$DEGEN_RPS_ADDR" "getGame(uint256)" "$i" --rpc-url {{default-rpc-url}} 2>/dev/null)
+        
+        if [ -z "$GAME_DATA" ]; then
+            continue
+        fi
+        
+        # Parse the tuple - use cast with --json for easier parsing
+        GAME_DATA_JSON=$(cast call "$DEGEN_RPS_ADDR" "getGame(uint256)" "$i" --rpc-url {{default-rpc-url}} --json 2>/dev/null || echo "")
+        
+        if [ -n "$GAME_DATA_JSON" ] && echo "$GAME_DATA_JSON" | jq . >/dev/null 2>&1; then
+            # JSON format from cast --json
+            STATE=$(echo "$GAME_DATA_JSON" | jq -r '.[8]')
+        else
+            # Fallback: parse space-separated tuple format
+            GAME_DATA_CLEAN=$(echo "$GAME_DATA" | sed 's/^(\(.*\))$/\1/' | sed 's/^\[\(.*\)\]$/\1/')
+            read -r _P1 _P2 _T _B _C _PROOF _P2M _P1M STATE _CA _RD _W <<< "$GAME_DATA_CLEAN"
+        fi
+        
+        # State 2 = Settled
+        if [ "$STATE" != "2" ]; then
+            continue
+        fi
+        
+        SETTLED_COUNT=$((SETTLED_COUNT + 1))
+        
+        # Parse all game data
+        if [ -n "$GAME_DATA_JSON" ] && echo "$GAME_DATA_JSON" | jq . >/dev/null 2>&1; then
+            # JSON format from cast --json
+            PLAYER1=$(echo "$GAME_DATA_JSON" | jq -r '.[0]')
+            PLAYER2=$(echo "$GAME_DATA_JSON" | jq -r '.[1]')
+            TOKEN=$(echo "$GAME_DATA_JSON" | jq -r '.[2]')
+            BET_AMOUNT=$(echo "$GAME_DATA_JSON" | jq -r '.[3]')
+            COMMITMENT=$(echo "$GAME_DATA_JSON" | jq -r '.[4]')
+            PLAYER2_MOVE=$(echo "$GAME_DATA_JSON" | jq -r '.[6]')
+            PLAYER1_MOVE=$(echo "$GAME_DATA_JSON" | jq -r '.[7]')
+            CREATED_AT=$(echo "$GAME_DATA_JSON" | jq -r '.[9]')
+            REVEAL_DEADLINE=$(echo "$GAME_DATA_JSON" | jq -r '.[10]')
+            WINNER=$(echo "$GAME_DATA_JSON" | jq -r '.[11]')
+        else
+            # Fallback: parse space-separated tuple format
+            GAME_DATA_CLEAN=$(echo "$GAME_DATA" | sed 's/^(\(.*\))$/\1/' | sed 's/^\[\(.*\)\]$/\1/')
+            read -r PLAYER1 PLAYER2 TOKEN BET_AMOUNT COMMITMENT _PROOF PLAYER2_MOVE PLAYER1_MOVE _STATE CREATED_AT REVEAL_DEADLINE WINNER <<< "$GAME_DATA_CLEAN"
+        fi
+        
+        # Skip if player1 is zero address (game doesn't exist)
+        if [ "$PLAYER1" = "0x0000000000000000000000000000000000000000" ] || [ -z "$PLAYER1" ]; then
+            continue
+        fi
+        
+        # Print header for first settled game
+        if [ $SETTLED_COUNT -eq 1 ]; then
+            echo "═══════════════════════════════════════════════════════════════════════════════"
+            echo ""
+        fi
+        
+        # Convert move enums
+        PLAYER2_MOVE_STR=$(move_to_string "$PLAYER2_MOVE")
+        PLAYER1_MOVE_STR=$(move_to_string "$PLAYER1_MOVE")
+        
+        # Format timestamps
+        CREATED_AT_STR=$(format_timestamp "$CREATED_AT")
+        REVEAL_DEADLINE_STR=$(format_timestamp "$REVEAL_DEADLINE")
+        
+        # Format bet amount
+        BET_AMOUNT_STR=$(format_amount "$BET_AMOUNT")
+        # Calculate total prize (bet amount * 2)
+        BET_AMOUNT_DEC=$(echo "$BET_AMOUNT" | sed 's/^0x//')
+        if [ -n "$BET_AMOUNT_DEC" ] && [ "$BET_AMOUNT_DEC" != "0" ]; then
+            TOTAL_PRIZE=$(python3 -c "amt=int('$BET_AMOUNT_DEC', 16); print('{:.6f}'.format(amt * 2 / 10**18))" 2>/dev/null || echo "N/A")
+        else
+            TOTAL_PRIZE="0"
+        fi
+        
+        # Get token symbol
+        TOKEN_SYMBOL=$(cast call "$TOKEN" "symbol()" --rpc-url {{default-rpc-url}} 2>/dev/null || echo "TOKEN")
+        
+        # Determine outcome
+        if [ "$WINNER" = "0x0000000000000000000000000000000000000000" ] || [ -z "$WINNER" ]; then
+            OUTCOME="🤝 TIE - Both players refunded"
+            WINNER_STR="N/A (Tie)"
+        elif [ "$WINNER" = "$PLAYER1" ]; then
+            OUTCOME="🏆 Player 1 (Maker) WINS"
+            WINNER_STR="Player 1"
+        elif [ "$WINNER" = "$PLAYER2" ]; then
+            OUTCOME="🏆 Player 2 (Taker) WINS"
+            WINNER_STR="Player 2"
+        else
+            OUTCOME="❓ Unknown winner"
+            WINNER_STR=$(shorten_addr "$WINNER")
+        fi
+        
+        echo "🎮 Game ID: $i"
+        echo "───────────────────────────────────────────────────────────────────────────────"
+        echo "  $OUTCOME"
+        echo ""
+        echo "  👤 Player 1 (Maker):  $(shorten_addr "$PLAYER1")"
+        echo "     Move: $PLAYER1_MOVE_STR"
+        echo "  👤 Player 2 (Taker):  $(shorten_addr "$PLAYER2")"
+        echo "     Move: $PLAYER2_MOVE_STR"
+        echo ""
+        echo "  🪙 Token:             $(shorten_addr "$TOKEN") ($TOKEN_SYMBOL)"
+        echo "  💰 Bet Amount:        $BET_AMOUNT_STR $TOKEN_SYMBOL (each player)"
+        echo "  🏅 Total Prize Pool:  $TOTAL_PRIZE $TOKEN_SYMBOL"
+        echo "  👑 Winner:            $WINNER_STR"
+        echo "  🔒 Commitment:        $(shorten_addr "$COMMITMENT")"
+        echo "  📅 Created At:        $CREATED_AT_STR"
+        echo "  ⏰ Reveal Deadline:   $REVEAL_DEADLINE_STR"
+        echo ""
+    done
+    
+    if [ $SETTLED_COUNT -eq 0 ]; then
+        echo "📭 No settled games found."
+    else
+        echo "═══════════════════════════════════════════════════════════════════════════════"
+        echo ""
+        echo "📊 Summary: Found $SETTLED_COUNT settled game(s)"
+    fi
+
 # Get token balance
 # Usage: just balance <token_addr> <account>
 balance token_addr account:

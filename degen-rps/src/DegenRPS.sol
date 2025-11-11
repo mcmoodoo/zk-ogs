@@ -201,10 +201,13 @@ contract DegenRPS {
 
         // Verify ZK proof - this is the primary verification mechanism
         // The ZK proof proves: 1) the move matches the commitment, 2) the winner calculation is correct
+        // NOTE: The Noir circuit expects frontend format moves (0=Rock, 1=Paper, 2=Scissors)
+        // but the contract uses enum format (1=Rock, 2=Paper, 3=Scissors), so we convert
         uint8 computedWinner = uint8(_determineWinner(move, game.player2Move));
         bytes32[] memory publicInputs = new bytes32[](3);
-        publicInputs[0] = bytes32(uint256(uint8(move)));
-        publicInputs[1] = bytes32(uint256(uint8(game.player2Move)));
+        // Convert enum format (1,2,3) to frontend format (0,1,2) for the verifier
+        publicInputs[0] = bytes32(uint256(uint8(move) - 1));
+        publicInputs[1] = bytes32(uint256(uint8(game.player2Move) - 1));
         publicInputs[2] = bytes32(uint256(computedWinner));
 
         require(verifier.verify(proof, publicInputs), "Invalid ZK proof");

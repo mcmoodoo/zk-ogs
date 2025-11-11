@@ -1060,9 +1060,12 @@ async function createMakerGame() {
     // Generate salt and commitment
     const salt = ethers.randomBytes(32);
     const saltField = ethers.hexlify(salt);
-    const moveValue = gameState.move; // 0=Rock, 1=Paper, 2=Scissors
+    const moveValue = gameState.move; // 0=Rock, 1=Paper, 2=Scissors (frontend format)
+    // IMPORTANT: The contract's revealAndSettle verifies commitment using enum format (1,2,3)
+    // So we need to create the commitment with enum format to match
+    const moveEnum = moveValue + 1; // Convert to DegenRPS enum: 1=Rock, 2=Paper, 3=Scissors
     const commitment = ethers.keccak256(
-      ethers.solidityPacked(["uint8", "bytes32"], [moveValue, saltField])
+      ethers.solidityPacked(["uint8", "bytes32"], [moveEnum, saltField])
     );
 
     gameState.salt = saltField;
@@ -2343,11 +2346,14 @@ async function loadMakerGames() {
         // Convert player2Move from DegenRPS enum (1,2,3) to frontend (0,1,2)
         const player2MoveFrontend = game.player2Move !== null && game.player2Move !== undefined ? game.player2Move - 1 : null;
         const player2MoveName = player2MoveFrontend !== null ? moveNames[player2MoveFrontend] : "Unknown";
+        // Get commitment hash from game data or use gameId as fallback
+        const commitmentHash = game.commitment || game.commitmentHash || game.gameId;
         actionButton = `
           <div class="mt-3 pt-3 border-t border-gray-200">
             <p class="text-xs text-gray-600 mb-2">Player 2's Move: ${player2MoveName}</p>
             <button
-              onclick="revealMakerMove('${game.gameId}', '${game.commitmentHash}')"
+              id="reveal-btn-${game.gameId}"
+              onclick="window.revealMakerMove('${game.gameId}', '${commitmentHash}')"
               class="w-full px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-lg hover:from-green-700 hover:to-emerald-700 transform hover:scale-105 transition-all"
             >
               🔓 Reveal Move
@@ -3024,10 +3030,16 @@ async function serializeProof(proof) {
 
 // Reveal move (Maker) with ZK proof
 async function revealMakerMove(gameId, commitmentHash) {
+  console.log("revealMakerMove called with:", { gameId, commitmentHash, typeGameId: typeof gameId, typeCommitmentHash: typeof commitmentHash });
+  log("🔓 Reveal Move button clicked!");
+  
   if (!signer || !rpsContract || !noir || !backend) {
     log("❌ Contracts or Noir not initialized");
+    console.error("Missing:", { signer: !!signer, rpsContract: !!rpsContract, noir: !!noir, backend: !!backend });
     return;
   }
+  
+  log("🔍 Step 1: Initial checks passed");
 
   // Set game state for this specific game
   const originalGameId = gameState.gameId;
@@ -3040,27 +3052,43 @@ async function revealMakerMove(gameId, commitmentHash) {
     gameState.role = "maker";
     
     // Get the game data to find the salt and move
+    log("🔍 Step 2: Getting game data from localStorage...");
     const trackedGames = getMakerGames();
+    console.log("Tracked games:", trackedGames);
+    console.log("Looking for commitmentHash:", commitmentHash, "or gameId:", gameId);
     const gameData = trackedGames[commitmentHash] || trackedGames[gameId];
+    console.log("Found game data:", gameData);
     
     if (!gameData) {
       log("❌ Game data not found. Cannot reveal without salt.");
+      log(`   Searched for commitmentHash: ${commitmentHash}`);
+      log(`   Searched for gameId: ${gameId}`);
+      log(`   Available keys: ${Object.keys(trackedGames).join(", ")}`);
       return;
     }
     
     // Get salt and move from localStorage (stored when game was created)
+    log("🔍 Step 3: Extracting salt and move...");
     const salt = gameData.salt || gameState.salt;
     const move = gameData.move !== null && gameData.move !== undefined ? gameData.move : gameState.move;
+    console.log("Salt:", salt, "Move:", move);
     
     if (!salt) {
       log("❌ Salt not found. Cannot reveal this game.");
+      log(`   Game data: ${JSON.stringify(gameData)}`);
       return;
     }
     
     if (move === null || move === undefined) {
       log("❌ Move not found. Cannot reveal this game.");
+      log(`   Game data: ${JSON.stringify(gameData)}`);
       return;
     }
+    
+    log(`✅ Salt and move found: move=${move}, salt=${salt.slice(0, 10)}...`);
+
+    // Convert gameId to BigInt for contract calls
+    const gameIdBigInt = typeof gameId === "bigint" ? gameId : BigInt(gameId.toString());
 
     const networkOk = await ensureCorrectNetwork();
     if (!networkOk) {
@@ -3069,7 +3097,7 @@ async function revealMakerMove(gameId, commitmentHash) {
     }
 
     log("Getting game state from DegenRPS contract...");
-    const game = await rpsContract.getGame(gameId);
+    const game = await rpsContract.getGame(gameIdBigInt);
 
     // Check if it's an array or object
     const isArray = Array.isArray(game) || (typeof game === "object" && game.length !== undefined);
@@ -3077,8 +3105,8 @@ async function revealMakerMove(gameId, commitmentHash) {
     // Safely access fields
     let taker, takerMove, revealDeadlineBigInt;
     if (isArray && game.length > 10) {
-      taker = game[2]; // player2
-      takerMove = game[6]; // player2Move
+      taker = game[1]; // player2 (index 1 in the struct)
+      takerMove = game[6]; // player2Move (index 6 in the struct)
       revealDeadlineBigInt = game[10];
     } else {
       taker = game.player2;
@@ -3086,8 +3114,12 @@ async function revealMakerMove(gameId, commitmentHash) {
       revealDeadlineBigInt = game.revealDeadline;
     }
 
+    log(`🔍 Step 6: Checking game state...`);
+    log(`   Taker: ${taker}`);
+    log(`   Taker move (from contract): ${takerMove}`);
+
     // Check that Taker has joined
-    if (taker === ethers.ZeroAddress || takerMove === 255) {
+    if (taker === ethers.ZeroAddress || takerMove === 0 || takerMove === 255) {
       log("⏳ Waiting for taker to join...");
       return;
     }
@@ -3102,28 +3134,38 @@ async function revealMakerMove(gameId, commitmentHash) {
       return;
     }
 
-    const makerMove = Number(move);
-    const takerMoveNum = Number(takerMove);
+    log("🔍 Step 7: Converting moves...");
+    const makerMove = Number(move); // Frontend format: 0=Rock, 1=Paper, 2=Scissors
+    const takerMoveContract = Number(takerMove); // DegenRPS enum: 1=Rock, 2=Paper, 3=Scissors
+    
+    // Convert taker's move from DegenRPS enum (1,2,3) to frontend format (0,1,2)
+    const takerMoveNum = takerMoveContract - 1;
+    
+    log(`   Maker move (frontend): ${makerMove} (${makerMove === 0 ? "Rock" : makerMove === 1 ? "Paper" : "Scissors"})`);
+    log(`   Taker move (contract enum): ${takerMoveContract} (${takerMoveContract === 1 ? "Rock" : takerMoveContract === 2 ? "Paper" : "Scissors"})`);
+    log(`   Taker move (frontend): ${takerMoveNum} (${takerMoveNum === 0 ? "Rock" : takerMoveNum === 1 ? "Paper" : "Scissors"})`);
 
-    // Validate moves
+    // Validate moves (frontend format: 0-2)
     if (makerMove < 0 || makerMove > 2 || takerMoveNum < 0 || takerMoveNum > 2) {
-      log(`❌ Invalid moves: makerMove=${makerMove}, takerMove=${takerMoveNum}`);
+      log(`❌ Invalid moves: makerMove=${makerMove}, takerMove=${takerMoveNum} (from contract enum ${takerMoveContract})`);
       throw new Error(`Invalid moves: makerMove=${makerMove}, takerMove=${takerMoveNum}`);
     }
 
-    log(`✅ Maker's move: ${makerMove === 0 ? "Rock" : makerMove === 1 ? "Paper" : "Scissors"}`);
-    log(`✅ Taker's move: ${takerMoveNum === 0 ? "Rock" : takerMoveNum === 1 ? "Paper" : "Scissors"}`);
-    log("Generating ZK proof... ⏳");
+    log("🔍 Step 8: Generating ZK proof...");
+    log(`✅ Maker's move: ${makerMove === 0 ? "Rock" : makerMove === 1 ? "Paper" : "Scissors"} (${makerMove})`);
+    log(`✅ Taker's move: ${takerMoveNum === 0 ? "Rock" : takerMoveNum === 1 ? "Paper" : "Scissors"} (${takerMoveNum})`);
 
     const winner = determineWinnerLocal(makerMove, takerMoveNum);
-    log(`Expected winner: ${winner === 0 ? "Tie" : winner === 1 ? "Maker" : "Taker"}`);
+    log(`Expected winner: ${winner === 0 ? "Tie" : winner === 1 ? "Maker" : "Taker"} (${winner})`);
 
-    // Generate proof - Noir expects Field values
+    // Generate proof - Noir expects Field values (frontend format: 0,1,2)
     const inputs = {
-      player1_move: makerMove,
-      player2_move: takerMoveNum,
-      winner: winner,
+      player1_move: makerMove,      // Frontend format: 0=Rock, 1=Paper, 2=Scissors
+      player2_move: takerMoveNum,   // Frontend format: 0=Rock, 1=Paper, 2=Scissors
+      winner: winner,               // 0=Tie, 1=Player1, 2=Player2
     };
+    
+    log(`Proof inputs: player1_move=${inputs.player1_move}, player2_move=${inputs.player2_move}, winner=${inputs.winner}`);
 
     log(`Calling noir.execute with inputs: player1_move=${makerMove}, player2_move=${takerMoveNum}, winner=${winner}`);
 
@@ -3178,20 +3220,62 @@ async function revealMakerMove(gameId, commitmentHash) {
       throw serializeError;
     }
 
-    // Convert move to DegenRPS enum (1=Rock, 2=Paper, 3=Scissors)
+    // Convert move to DegenRPS enum (1=Rock, 2=Paper, 3=Scissors) for the contract call
     const moveEnum = makerMove + 1;
+    
+    // Verify commitment matches before sending transaction
+    log("🔍 Step 9: Verifying commitment...");
+    // IMPORTANT: The contract verifies commitment using the enum move (1,2,3), not frontend format (0,1,2)
+    // But when we created the game, we used frontend format. Let's check both to see which one matches.
+    const commitmentCheckFrontend = ethers.keccak256(
+      ethers.solidityPacked(["uint8", "bytes32"], [makerMove, salt])
+    );
+    const commitmentCheckEnum = ethers.keccak256(
+      ethers.solidityPacked(["uint8", "bytes32"], [moveEnum, salt])
+    );
+    const storedCommitment = isArray ? game[4] : game.commitment;
+    log(`   Calculated commitment (frontend move ${makerMove}): ${commitmentCheckFrontend}`);
+    log(`   Calculated commitment (enum move ${moveEnum}): ${commitmentCheckEnum}`);
+    log(`   Stored commitment: ${storedCommitment}`);
+    
+    // Check which format matches - the contract expects enum format
+    let commitmentMatches = false;
+    if (commitmentCheckEnum.toLowerCase() === storedCommitment.toLowerCase()) {
+      commitmentMatches = true;
+      log(`✅ Commitment verified with enum format!`);
+    } else if (commitmentCheckFrontend.toLowerCase() === storedCommitment.toLowerCase()) {
+      // This means the game was created with frontend format, but contract expects enum format
+      log(`⚠️ Commitment matches frontend format, but contract expects enum format!`);
+      log(`   This suggests the game was created incorrectly.`);
+      throw new Error("Commitment format mismatch - game was created with wrong move format");
+    } else {
+      log(`❌ Commitment mismatch!`);
+      log(`   Expected: ${storedCommitment}`);
+      log(`   Got (frontend): ${commitmentCheckFrontend}`);
+      log(`   Got (enum): ${commitmentCheckEnum}`);
+      log(`   Move (frontend): ${makerMove}, Move (enum): ${moveEnum}`);
+      log(`   Salt: ${salt.slice(0, 10)}...`);
+      throw new Error("Commitment verification failed - move or salt is incorrect");
+    }
 
     try {
+      log("🔍 Step 10: Estimating gas...");
       const gasEstimate = await rpsContract.revealAndSettle.estimateGas(
-        gameId,
+        gameIdBigInt,
         moveEnum,
         salt,
         proofBytes
       );
       log(`⛽ Gas estimate: ${gasEstimate.toString()}`);
 
+      log("🔍 Step 11: Sending reveal transaction...");
+      log(`   gameId: ${gameIdBigInt}`);
+      log(`   moveEnum: ${moveEnum} (frontend move: ${makerMove})`);
+      log(`   salt: ${salt.slice(0, 10)}...`);
+      log(`   proofBytes length: ${proofBytes.length} chars`);
+      
       const tx = await rpsContract.revealAndSettle(
-        gameId,
+        gameIdBigInt,
         moveEnum,
         salt,
         proofBytes,
