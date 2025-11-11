@@ -361,4 +361,47 @@ contract DegenRPS {
 
         return gameIds;
     }
+
+    /// @notice Get all game IDs where the specified address is player1 (maker)
+    /// @param player The address to check
+    /// @return gameIds Array of game IDs where the player is player1
+    function getGamesByPlayer(address player) external view returns (uint256[] memory) {
+        uint256 count = 0;
+        for (uint256 i = 0; i < nextGameId; i++) {
+            if (games[i].player1 == player) {
+                count++;
+            }
+        }
+
+        uint256[] memory gameIds = new uint256[](count);
+        uint256 index = 0;
+        for (uint256 i = 0; i < nextGameId; i++) {
+            if (games[i].player1 == player) {
+                gameIds[index++] = i;
+            }
+        }
+
+        return gameIds;
+    }
+
+    /// @notice Get all games waiting for player1 to reveal
+    /// @return gameIds Array of game IDs in WaitingForReveal state
+    function getGamesWaitingForReveal() external view returns (uint256[] memory) {
+        uint256 count = 0;
+        for (uint256 i = 0; i < nextGameId; i++) {
+            if (games[i].state == GameState.WaitingForReveal) {
+                count++;
+            }
+        }
+
+        uint256[] memory gameIds = new uint256[](count);
+        uint256 index = 0;
+        for (uint256 i = 0; i < nextGameId; i++) {
+            if (games[i].state == GameState.WaitingForReveal) {
+                gameIds[index++] = i;
+            }
+        }
+
+        return gameIds;
+    }
 }
