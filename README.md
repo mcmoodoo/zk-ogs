@@ -1,4 +1,4 @@
-# ZK Rock Paper Scissors Game
+# Uniswap V4 Hook with ZK Rock Paper Scissors Game
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 ![Solidity 0.8.20](https://img.shields.io/badge/Solidity-0.8.20-363636?logo=solidity)
@@ -6,138 +6,96 @@
 ![Vite](https://img.shields.io/badge/Vite-4.x-646CFF?logo=vite)
 ![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js)
 
-A fully functional zero-knowledge rock-paper-scissors game where players commit moves, reveal with ZK proofs, and resolve games on-chain. Built with **Noir**, **Barretenberg**, **Hardhat 3**, and **Ethereum**.
+A Uniswap v4 hook that turns every swap into a chance to play a zero-knowledge rock-paper-scissors duel. A small slice of the swap amount is escrowed inside the hook, the players resolve the match with Noir-based proofs, and the hook redistributes the game token stake to the winner. Built with **Noir**, **Barretenberg**, **Hardhat 3**, and **Ethereum**.
 
 ## Overview
 
-Players generate cryptographic zero-knowledge proofs using Noir circuits that prove:
+Each game unfolds alongside a Uniswap swap:
 
-- The winner calculation is mathematically correct
-- Both moves are valid (0=Rock, 1=Paper, 2=Scissors)
-- The game logic matches the smart contract's resolution logic
+- **Player A** creates a game during the hook’s pre-swap phase, escrowing 5% (configurable) of the swap amount and submitting a commitment to their move (`keccak256(move || salt)`).
+- **Player B** joins any open game by matching the stake and submitting their clear-text move; no commitment step is required.
+- Once matched, **Player A** reveals their move plus salt along with a Noir-generated ZK proof that the outcome was computed correctly.
+- The hook contract validates the commitment, verifies the ZK proof through the game manager contract, and pays the escrowed tokens to the winner (or slashes Player A if they fail to reveal before expiry).
 
-**Current State:**
-
-- ✅ Real ZK proofs generated client-side using NoirJS and Barretenberg backend
-- ✅ Proofs verified locally before submission
-- ✅ Commit-reveal scheme prevents front-running
-- ⏳ On-chain proof verification (requires verifier contract generation)
+This flow keeps Player A’s move hidden until reveal, protects Player B from front-running, and ensures rewards are settled atomically with the swap.
 
 ## Technology Stack
 
 ### Zero-Knowledge Layer
 
-- **Noir**: Domain-specific language for ZK circuits
-- **Barretenberg**: UltraPLONK proof system backend (via `@aztec/bb.js`)
-- **NoirJS**: JavaScript bindings for Noir circuits
+- **Noir**: Defines the rock-paper-scissors circuit, including move validation and outcome computation.
+- **Barretenberg (`@aztec/bb.js`)**: Generates UltraPLONK proofs that attest the circuit ran correctly.
+- **NoirJS**: Bridges the browser to Noir so Player A can compile witnesses and proofs client-side.
 
-### Smart Contract Layer
+### Game Manager Contracts
 
-- **Solidity 0.8.20**: Game logic and state management
-- **Hardhat 3**: Development environment
+- **Solidity 0.8.20**: Implements the commit/reveal lifecycle, escrow bookkeeping, and proof verification interface.
+- **Hardhat 3**: Provides compilation, testing, and deployment tooling for the core game logic.
 
-### Frontend
+### Uniswap Hook Layer
 
-- **Vite**: Lightweight build tool
-- **Ethers.js v6**: Ethereum interaction
-- **NoirJS**: Circuit execution and proof generation
+- **Solidity 0.8.20**: Extends Uniswap v4’s `IHooks` to siphon a configurable percentage of each swap into a game escrow, call into the manager contract, and release funds atomically with the swap outcome.
+- **Hardhat 3**: Supplies the local fork environment and scripts used to exercise hook callbacks during development.
 
-## How Zero-Knowledge Works Here
+### Frontend Layer
 
-### The Circuit (`circuit/src/main.nr`)
-
-The Noir circuit defines the game logic in zero-knowledge:
-
-```rust
-fn main(
-    player1_move: Field,  // Private input
-    player2_move: Field,   // Private input
-    winner: pub Field      // Public output
-) {
-    // Validates moves are 0, 1, or 2
-    // Computes winner using determine_winner()
-    // Asserts winner matches provided value
-}
-```
-
-**What the proof proves:**
-
-1. Both moves are valid (0, 1, or 2)
-2. The winner calculation is correct according to game rules
-3. The public `winner` field matches the computed result
-
-### Proof Generation Flow
-
-1. **Both players reveal their moves** (already committed with Keccak256 hashes)
-2. **Frontend computes expected winner** using the same logic as the contract
-3. **Noir circuit executes** with moves and winner as inputs
-4. **Barretenberg backend generates a proof** proving the computation is correct
-5. **Proof is verified locally** before sending to contract
-6. **Proof is sent to contract** (on-chain verification pending)
-
-### Commit-Reveal Scheme
-
-To prevent front-running and ensure fair play:
-
-1. **Commit Phase**:
-
-   - Players generate random salt
-   - Create commitment: `keccak256(move || salt)`
-   - Submit commitment hash to contract (move is hidden)
-
-2. **Reveal Phase**:
-
-   - Players reveal move + salt
-   - Contract verifies `keccak256(move || salt) == commitment`
-   - ZK proof generated proving winner calculation
-
-3. **Resolution**:
-   - Contract's `_resolveGame()` determines winner
-   - ZK proof proves this calculation is correct
+- **Vite + Vanilla JS**: Lightweight UI for creating games, joining them, and triggering reveals from the browser.
+- **Ethers.js v6**: Handles wallet connections, swap-triggered hook interactions, and proof submissions.
+- **NoirJS**: Runs circuit witness generation and proof verification before anything touches the chain.
 
 ## Game Flow
 
 ```
-Player 1                     Contract                    Player 2
-   |                            |                            |
-   |-- createGame() ----------->|                            |
-   |                            |                            |
-   |                            |<-- joinGame() ------------|
-   |                            |                            |
-   |-- commitMove(hash) ------->|                            |
-   |                            |<-- commitMove(hash) -------|
-   |                            |                            |
-   |-- revealMove(move+salt) -->|                            |
-   |     + ZK proof             |                            |
-   |                            |<-- revealMove(move+salt) --|
-   |                            |     + ZK proof             |
-   |                            |                            |
-   |                            |-- _resolveGame() ----------|
-   |<-- GameResolved event -----|                            |
+Trader / Player A           Uniswap Hook                     Player B
+--------------------------  -------------------------------  ----------------------
+Swap starts                 |                               |
+hook.afterSwap()  --------> |                               |
+│  stake % of swap tokens   |                               |
+│  createGame(commitment)   |                               |
+│                           |-- open escrow & emit event -->|
+│                           |                               |
+Await opponent              |                               |
+│                           |<-- joinGame(clearMove, stake)--│
+│                           |      (no commit needed)        |
+│                           |                               |
+Reveal & resolve            |                               |
+resolveGame(move, salt, proof)                              |
+│ ------------------------> |                               |
+│                           |-- verify commitment & proof -->|
+│                           |-- call game logic              |
+│                           |-- pay winner / slash default --|
+│ <--- swap resumes --------|                               |
+│                           |                               |
+│                                                       winner receives stake
 ```
 
 ## Project Structure
 
 ```
-zk-rps/
-├── circuit/                    # Noir ZK circuit
-│   ├── src/
-│   │   └── main.nr           # Circuit: validates moves & determines winner
-│   └── Nargo.toml            # Noir project config
-├── contracts/                 # Solidity smart contracts
+zk-ogs/
+├── circuit/                        # Noir ZK circuit & witness generation
+│   ├── src/main.nr                 # Circuit: validates moves & outcome
+│   └── regenerate-verifier.sh      # Helper script for verifier artifacts
+├── contracts/                      # Core game manager (commit/reveal + proof)
 │   ├── contracts/
-│   │   ├── RockPaperScissors.sol    # Main game contract
-│   │   └── RockPaperScissors.t.sol  # Solidity tests
-│   ├── ignition/
-│   │   └── modules/
-│   │       └── RockPaperScissors.ts  # Deployment module
-│   └── hardhat.config.ts      # Hardhat 3 config
-└── frontend/                  # Web frontend
-    ├── index.html            # UI
-    ├── app.js                # Game logic + ZK proof generation
-    ├── vite.config.js        # Vite config with node polyfills
-    └── target/
-        └── circuit.json      # Compiled Noir circuit (copied from circuit/)
+│   │   ├── RockPaperScissors.sol   # Game lifecycle & escrow accounting
+│   │   ├── Verifier.sol            # Generated verifier scaffold
+│   │   └── RockPaperScissors.t.sol # Foundry-based tests
+│   ├── ignition/modules/
+│   │   └── RockPaperScissors.ts    # Hardhat Ignition deployment module
+│   └── hardhat.config.ts           # Hardhat 3 configuration
+├── degen-rps/                      # Standalone Foundry project for RPS variant
+│   ├── src/DegenRPS.sol            # Alternative game manager
+│   ├── script/Deploy.s.sol         # Foundry deployment script
+│   └── test/DegenRPS.t.sol         # Variant-specific tests
+├── notes/                          # Design investigations & scratch notes
+│   └── different_approach.md       # Alternative architecture sketch
+├── raffle-pool/                    # Uniswap v4 hook + Foundry deployment flow
+│   ├── src/RPSHook.sol             # Pre-swap hook escrow logic
+│   ├── script/                     # Foundry scripts for pools & swaps
+│   └── test/RPSHook.t.sol          # Hook integration tests
+└── pool-ui/                        # React dashboard for pool + hook monitoring
+    └── src/                        # Components, hooks, and routing
 ```
 
 ## Setup
@@ -187,119 +145,65 @@ cp ../circuit/target/circuit.json target/
 cp ../contracts/artifacts/contracts/RockPaperScissors.sol/RockPaperScissors.json contract-artifact.json
 ```
 
-## Running Locally
+## Try the game we deployed
 
-### 1. Start Hardhat Node
+[Game Page](https://degen-rps.vercel.app/swap-rps)
 
-```bash
-cd contracts
-npx hardhat node
-```
+[Fund your wallet with Test Token](https://degen-rps.vercel.app/fund)
 
-This starts a local Ethereum node at `http://127.0.0.1:8545` with Chain ID `31337`.
+## The steps of playing the game
 
-### 2. Deploy Contract
+1. **Connect your wallet**  
+   Launch `pool-ui` (`npm run dev`) and connect to your local Anvil / Hardhat network. The dashboard auto-loads deployed addresses from `deployments.json`.
 
-In a new terminal:
+2. **Swap & start a game (Player A)**  
+   - Open the **Swap & Play** page.  
+   - Choose the token pair, amount, and toggle the percentage of the swap you want to escrow (default 5%).  
+   - Pick your move (Rock, Paper, or Scissors) and click **Swap & Start Game**.  
+   - The UI submits a Uniswap swap routed through `RPSHook.sol`, escrows the stake, and stores your move + salt commitment locally (keep browser storage intact).
 
-```bash
-cd contracts
-npx hardhat ignition deploy ignition/modules/RockPaperScissors.ts --network localhost
-```
+3. **Join an open game (Player B)**  
+   - Visit **Games** to browse matches waiting for an opponent.  
+   - Match the stake, pick your move, and confirm **Join Game**. Your move is written on-chain in clear text—no commitment phase required.
 
-Copy the contract address from the output (e.g., `0x5FbDB2315678afecb367f032d93F642f64180aa3`).
+4. **Reveal & settle (Player A)**  
+   - After someone joins, return to your game card and hit **Reveal Move**.  
+   - The app reads your committed move/salt from localStorage, runs the Noir circuit to produce the proof, and calls `resolveGame`.  
+   - The hook contract validates the commitment, verifies the proof via the manager contract, pays the winner from escrow, and releases the swap back to Uniswap.
 
-### 3. Configure Frontend
-
-1. Open `frontend/index.html` in browser (or use Vite dev server)
-2. Enter the contract address in the UI
-3. Click "Set Contract"
-
-Alternatively, set it in `frontend/app.js`:
-
-```javascript
-let CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
-```
-
-### 4. Start Frontend Dev Server
-
-```bash
-cd frontend
-npm run dev
-```
-
-Visit `http://localhost:5173`
-
-### 5. Fund Your Wallet
-
-Hardhat node creates 20 accounts with 10,000 ETH each. Choose one:
-
-**Option A: Import Hardhat Account to MetaMask**
-
-- Copy a private key from the Hardhat node output
-- In MetaMask: Account icon → Import Account → Paste private key
-
-**Option B: Send ETH to MetaMask**
-
-```bash
-cd contracts
-npx hardhat run scripts/fundWallet.ts --network localhost <YOUR_METAMASK_ADDRESS>
-```
-
-**Option C: Configure MetaMask Network**
-
-- Network Name: `Hardhat Local`
-- RPC URL: `http://127.0.0.1:8545`
-- Chain ID: `31337`
-- Currency Symbol: `ETH`
-
-## Playing the Game
-
-1. **Connect Wallet**: Click "Connect Wallet" in the UI
-2. **Create/Join Game**:
-   - Player 1: Click "Create Game"
-   - Player 2: Enter Game ID and click "Join Game"
-3. **Commit Move**: Click Rock 🪨, Paper 📄, or Scissors ✂️
-4. **Reveal Move**: After both players commit, click "Reveal Move"
-   - Frontend generates ZK proof proving winner calculation
-   - Proof is verified locally before submission
-5. **View Result**: Winner is announced after both reveals
+5. **Handle timeouts**  
+   If Player A never reveals before the deadline, Player B can trigger the timeout action from the UI to claim the escrow. Scripts in `raffle-pool/script/` demonstrate these flows end-to-end.
 
 ## How It Works
 
-### ZK Proof Generation
+### ZK Proof Lifecycle
 
-When a player reveals their move (and opponent has also revealed):
+1. **State availability** – Player B’s clear-text move and both stakes are stored on-chain as soon as they join via the hook.  
+2. **Witness construction** – When Player A clicks reveal, the frontend feeds `{player1_move, salt, player2_move}` into `circuit/src/main.nr` to compute the expected winner.  
+3. **Proof generation** – Barretenberg (via `@aztec/bb.js`) creates an UltraPLONK proof that the moves were valid values and that the published winner matches the circuit logic.  
+4. **Local verification** – The proof is checked client-side before submission; invalid proofs never hit the chain.  
+5. **On-chain submission** – `resolveGame` receives `(move, salt, proof)`, verifying `keccak256(move || salt)` against the commitment and, when the verifier contract is configured, validating the proof bytes.
 
-1. **Compute Witness**: Noir circuit executes with:
+### Hook Settlement Path
 
-   - `player1_move`: Field (private)
-   - `player2_move`: Field (private)
-   - `winner`: Field (public - computed result)
+1. **beforeSwap** – `RPSHook` runs before Uniswap finalizes the swap, siphoning the configured percentage into escrow and calling the game manager to record the commitment.  
+2. **joinGame** – Counterparties stake the matching amount through the hook, which locks liquidity until the game is resolved.  
+3. **resolveGame** – On reveal, the hook contract confirms the commitment, queries the verifier/game manager for the outcome, and sends the pooled tokens to the winner (or refunds both on draw).  
+4. **afterSwap** – TBC
 
-2. **Generate Proof**: Barretenberg backend creates a PLONK proof proving:
+### Failure Modes & Safeguards
 
-   - Moves are valid (0, 1, or 2)
-   - Winner calculation matches circuit logic
-   - Public output matches computed result
+- **Timeouts** – Non-responsive Player A forfeits their stake after the reveal window expires; automation scripts and UI actions enforce this.  
+- **Swap reentrancy** – Escrow updates happen before the pool’s state changes to avoid double-escrowing across nested hooks.  
+- **Proof optionality** – During development you can deploy without the verifier contract; the manager accepts a mock flag to skip proof verification while still enforcing commitments.
 
-3. **Verify Locally**: Proof is verified before submission to ensure validity
+## Design Exploration
 
-4. **Submit to Contract**: Proof bytes are sent (on-chain verification pending)
+We tracked the alternative commit–reveal models that led to the current flow, including trusted adjudication, zk approaches, and the final hybrid we shipped. Review the discussion and trade-offs in [`notes/different_approach.md`](notes/different_approach.md).
 
-### Smart Contract Logic
+## Further Plan
 
-The contract handles:
-
-- **Game State**: Manages game lifecycle (Waiting → Committed → Revealed → Completed)
-- **Commitment Verification**: Validates `keccak256(move || salt) == commitment`
-- **Winner Resolution**: Uses `_determineWinner()` matching circuit logic
-- **ZK Proof Storage**: Receives proof bytes (verification pending)
-
-### TODO
-
-- **On-chain verification not yet implemented**: Proofs are generated and verified client-side, but contract doesn't verify them yet
-- **To enable on-chain verification**: Generate verifier contract using Noir's verifier generation tools and integrate into `revealMove()`
+- [ ] Explore implementing another game that’s more suitable for ZKP (e.g., Battleship).
 
 ## License
 
