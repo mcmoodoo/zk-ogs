@@ -49,7 +49,7 @@ This flow keeps Player A’s move hidden until reveal, protects Player B from fr
 Trader / Player A           Uniswap Hook                     Player B
 --------------------------  -------------------------------  ----------------------
 Swap starts                 |                               |
-hook.beforeSwap() --------> |                               |
+hook.afterSwap()  --------> |                               |
 │  stake % of swap tokens   |                               |
 │  createGame(commitment)   |                               |
 │                           |-- open escrow & emit event -->|
@@ -143,73 +143,14 @@ cp ../circuit/target/circuit.json target/
 cp ../contracts/artifacts/contracts/RockPaperScissors.sol/RockPaperScissors.json contract-artifact.json
 ```
 
-## Running Locally
+## Try the game we deployed
 
-### 1. Start Hardhat Node
+[Game Page](https://degen-rps.vercel.app/swap-rps)
 
-```bash
-cd contracts
-npx hardhat node
-```
+[Fund your wallet with Test Token](https://degen-rps.vercel.app/fund)
 
-This starts a local Ethereum node at `http://127.0.0.1:8545` with Chain ID `31337`.
 
-### 2. Deploy Contract
-
-In a new terminal:
-
-```bash
-cd contracts
-npx hardhat ignition deploy ignition/modules/RockPaperScissors.ts --network localhost
-```
-
-Copy the contract address from the output (e.g., `0x5FbDB2315678afecb367f032d93F642f64180aa3`).
-
-### 3. Configure Frontend
-
-1. Open `frontend/index.html` in browser (or use Vite dev server)
-2. Enter the contract address in the UI
-3. Click "Set Contract"
-
-Alternatively, set it in `frontend/app.js`:
-
-```javascript
-let CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
-```
-
-### 4. Start Frontend Dev Server
-
-```bash
-cd frontend
-npm run dev
-```
-
-Visit `http://localhost:5173`
-
-### 5. Fund Your Wallet
-
-Hardhat node creates 20 accounts with 10,000 ETH each. Choose one:
-
-**Option A: Import Hardhat Account to MetaMask**
-
-- Copy a private key from the Hardhat node output
-- In MetaMask: Account icon → Import Account → Paste private key
-
-**Option B: Send ETH to MetaMask**
-
-```bash
-cd contracts
-npx hardhat run scripts/fundWallet.ts --network localhost <YOUR_METAMASK_ADDRESS>
-```
-
-**Option C: Configure MetaMask Network**
-
-- Network Name: `Hardhat Local`
-- RPC URL: `http://127.0.0.1:8545`
-- Chain ID: `31337`
-- Currency Symbol: `ETH`
-
-## Playing the Game
+## The steps of playing the game
 
 1. **Connect your wallet**  
    Launch `pool-ui` (`npm run dev`) and connect to your local Anvil / Hardhat network. The dashboard auto-loads deployed addresses from `deployments.json`.
