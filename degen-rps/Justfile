@@ -1,0 +1,1202 @@
+# Justfile for DegenRPS deployment and development
+
+# Default RPC URL
+default-rpc-url := "http://localhost:8545"
+
+# Default private key for local Anvil
+default-private-key := "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+
+# Chain ID (defaults to local Anvil)
+chain-id := "31337"
+
+# Deployments JSON file path
+deployments-file := "../frontend/deployments.json"
+
+# Default recipe - show available commands
+default:
+    @just --list
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+# Extract address from broadcast JSON file
+# Usage: just _extract-from-broadcast <script-name> <contract-name>
+_extract-from-broadcast SCRIPT_NAME CONTRACT_NAME:
+    #!/usr/bin/env bash
+    BROADCAST_FILE="broadcast/{{SCRIPT_NAME}}/{{chain-id}}/run-latest.json"
+    if [ -f "$BROADCAST_FILE" ]; then
+        jq -r ".transactions[] | select(.contractName == \"{{CONTRACT_NAME}}\") | .contractAddress" "$BROADCAST_FILE" 2>/dev/null | head -1
+    fi
+
+# Set contract metadata in deployments.json
+# Usage: just _set-contract-metadata <key> <address> <abi-path> <block-number>
+_set-contract-metadata KEY ADDRESS ABI_PATH BLOCK_NUMBER:
+    #!/usr/bin/env bash
+    if [ ! -f {{deployments-file}} ]; then
+        echo '{"chainId": "{{chain-id}}", "rpcUrl": "{{default-rpc-url}}", "contracts": {}}' > {{deployments-file}}
+    fi
+    
+    # Ensure chainId, rpcUrl and contracts structure exists
+    jq '.chainId = "{{chain-id}}" | .rpcUrl = (.rpcUrl // "{{default-rpc-url}}") | .contracts = (.contracts // {})' {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+    
+    # Read ABI if file exists and is not empty
+    ABI="[]"
+    if [ -n "{{ABI_PATH}}" ] && [ "{{ABI_PATH}}" != "" ] && [ -f "{{ABI_PATH}}" ]; then
+        ABI=$(jq -c '.abi' "{{ABI_PATH}}" 2>/dev/null || echo "[]")
+    fi
+    
+    # Update deployments.json with contract info
+    jq --arg key "{{KEY}}" \
+       --arg addr "{{ADDRESS}}" \
+       --argjson abi "$ABI" \
+       --arg block "{{BLOCK_NUMBER}}" \
+       '.contracts[$key] = {
+         address: $addr,
+         abi: $abi,
+         blockNumber: ($block | tonumber)
+       }' {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+
+# Get address from deployments.json
+# Usage: just _get-address <key>
+_get-address KEY:
+    #!/usr/bin/env bash
+    if [ -f {{deployments-file}} ]; then
+        jq -r ".contracts[\"{{KEY}}\"].address // empty" {{deployments-file}} 2>/dev/null || echo ""
+    fi
+
+# ============================================================================
+# Setup & Build
+# ============================================================================
+
+# Check if Anvil is running
+check-anvil:
+    @echo "Checking if Anvil is running..."
+    @curl -s {{default-rpc-url}} > /dev/null 2>&1 || (echo "❌ Anvil is not running on {{default-rpc-url}}" && echo "   Start it with: anvil" && exit 1)
+    @echo "✅ Anvil is running"
+
+# Build contracts
+build:
+    @echo "📦 Building contracts..."
+    forge build --force
+    @echo "✅ Build complete"
+
+# Clean build artifacts
+clean:
+    @echo "🧹 Cleaning build artifacts..."
+    forge clean
+    @echo "✅ Clean complete"
+
+# ============================================================================
+# Deployment
+# ============================================================================
+
+# Deploy all contracts to local Anvil
+# This deploys: Verifier, DegenRPS, Token0, Token1
+# Automatically extracts addresses and updates deployments.json
+deploy:
+    #!/usr/bin/env bash
+    set -e
+    
+    just check-anvil
+    just build
+    
+    echo "🚀 Deploying contracts to Anvil..."
+    echo ""
+    
+    # Deploy contracts (set PRIVATE_KEY env var for the script)
+    export PRIVATE_KEY={{default-private-key}}
+    forge script script/Deploy.s.sol:DeployScript \
+        --rpc-url {{default-rpc-url}} \
+        --broadcast \
+        --private-key {{default-private-key}}
+    
+    echo ""
+    echo "📋 Extracting contract addresses from broadcast files..."
+    
+    # Extract addresses from broadcast JSON
+    BROADCAST_FILE="broadcast/Deploy.s.sol/{{chain-id}}/run-latest.json"
+    
+    if [ ! -f "$BROADCAST_FILE" ]; then
+        echo "❌ Error: Broadcast file not found: $BROADCAST_FILE"
+        exit 1
+    fi
+    
+    # Extract addresses - get all CREATE transactions first
+    # Verifier
+    VERIFIER_ADDR=$(jq -r '.transactions[] | select(.contractName == "HonkVerifier" and (.transactionType == "CREATE" or .transactionType == "CREATE2")) | .contractAddress' "$BROADCAST_FILE" 2>/dev/null | head -1)
+    
+    # DegenRPS
+    DEGEN_RPS_ADDR=$(jq -r '.transactions[] | select(.contractName == "DegenRPS" and (.transactionType == "CREATE" or .transactionType == "CREATE2")) | .contractAddress' "$BROADCAST_FILE" 2>/dev/null | head -1)
+    
+    # Tokens - get all MockERC20 CREATE transactions
+    TOKEN_ADDRS=($(jq -r '.transactions[] | select(.contractName == "MockERC20" and (.transactionType == "CREATE" or .transactionType == "CREATE2")) | .contractAddress' "$BROADCAST_FILE" 2>/dev/null))
+    TOKEN0_ADDR="${TOKEN_ADDRS[0]}"
+    TOKEN1_ADDR="${TOKEN_ADDRS[1]}"
+    
+    # Get block numbers
+    VERIFIER_BLOCK=$(jq -r --arg addr "$VERIFIER_ADDR" '.receipts[] | select(.contractAddress == $addr) | .blockNumber' "$BROADCAST_FILE" 2>/dev/null | head -1 || echo "0")
+    DEGEN_RPS_BLOCK=$(jq -r --arg addr "$DEGEN_RPS_ADDR" '.receipts[] | select(.contractAddress == $addr) | .blockNumber' "$BROADCAST_FILE" 2>/dev/null | head -1 || echo "0")
+    TOKEN0_BLOCK=$(jq -r --arg addr "$TOKEN0_ADDR" '.receipts[] | select(.contractAddress == $addr) | .blockNumber' "$BROADCAST_FILE" 2>/dev/null | head -1 || echo "0")
+    TOKEN1_BLOCK=$(jq -r --arg addr "$TOKEN1_ADDR" '.receipts[] | select(.contractAddress == $addr) | .blockNumber' "$BROADCAST_FILE" 2>/dev/null | head -1 || echo "0")
+    
+    # Convert hex to decimal
+    VERIFIER_BLOCK=$(printf "%d" "$VERIFIER_BLOCK" 2>/dev/null || echo "0")
+    DEGEN_RPS_BLOCK=$(printf "%d" "$DEGEN_RPS_BLOCK" 2>/dev/null || echo "0")
+    TOKEN0_BLOCK=$(printf "%d" "$TOKEN0_BLOCK" 2>/dev/null || echo "0")
+    TOKEN1_BLOCK=$(printf "%d" "$TOKEN1_BLOCK" 2>/dev/null || echo "0")
+    
+    if [ -z "$VERIFIER_ADDR" ] || [ -z "$DEGEN_RPS_ADDR" ] || [ -z "$TOKEN0_ADDR" ] || [ -z "$TOKEN1_ADDR" ]; then
+        echo "❌ Error: Could not extract all contract addresses"
+        echo "   Verifier: $VERIFIER_ADDR"
+        echo "   DegenRPS: $DEGEN_RPS_ADDR"
+        echo "   Token0: $TOKEN0_ADDR"
+        echo "   Token1: $TOKEN1_ADDR"
+        exit 1
+    fi
+    
+    echo "✅ Extracted addresses:"
+    echo "   Verifier:  $VERIFIER_ADDR"
+    echo "   DegenRPS:  $DEGEN_RPS_ADDR"
+    echo "   Token0:    $TOKEN0_ADDR"
+    echo "   Token1:    $TOKEN1_ADDR"
+    echo ""
+    
+    # Update deployments.json with addresses and ABIs
+    echo "📝 Updating frontend/deployments.json..."
+    
+    # Save Verifier (ABI from compiled contract)
+    just _set-contract-metadata verifier "$VERIFIER_ADDR" "out/Verifier.sol/HonkVerifier.json" "$VERIFIER_BLOCK"
+    
+    # Save DegenRPS (ABI from compiled contract)
+    just _set-contract-metadata degenRPS "$DEGEN_RPS_ADDR" "out/DegenRPS.sol/DegenRPS.json" "$DEGEN_RPS_BLOCK"
+    
+    # Save Token0 (ABI from compiled contract - MockERC20)
+    just _set-contract-metadata token0 "$TOKEN0_ADDR" "out/MockERC20.sol/MockERC20.json" "$TOKEN0_BLOCK"
+    
+    # Save Token1 (ABI from compiled contract - MockERC20)
+    just _set-contract-metadata token1 "$TOKEN1_ADDR" "out/MockERC20.sol/MockERC20.json" "$TOKEN1_BLOCK"
+    
+    echo ""
+    echo "✅ Deployment complete! Addresses saved to {{deployments-file}}"
+    echo ""
+    echo "📋 Deployed contracts:"
+    echo "   Verifier:  $VERIFIER_ADDR"
+    echo "   DegenRPS:  $DEGEN_RPS_ADDR"
+    echo "   Token0:    $TOKEN0_ADDR"
+    echo "   Token1:    $TOKEN1_ADDR"
+    echo ""
+    
+    # Setup test wallets (fund with ETH and mint tokens)
+    echo ""
+    echo "💰 Setting up test wallets..."
+    MAKER="0x2f04d60991191005103d73bdcf12187a824d42a4"
+    TAKER="0x3109f6462af03c604b36664b511a17814ee8acff"
+    
+    echo "   Funding Maker wallet ($MAKER)..."
+    cast send "$MAKER" \
+        --value 100ether \
+        --private-key {{default-private-key}} \
+        --rpc-url {{default-rpc-url}} > /dev/null 2>&1 || echo "   ⚠️ Failed to fund Maker wallet"
+    
+    echo "   Funding Taker wallet ($TAKER)..."
+    cast send "$TAKER" \
+        --value 100ether \
+        --private-key {{default-private-key}} \
+        --rpc-url {{default-rpc-url}} > /dev/null 2>&1 || echo "   ⚠️ Failed to fund Taker wallet"
+    
+    echo "   Minting 1000 Token0 to Maker..."
+    cast send "$TOKEN0_ADDR" \
+        "mint(address,uint256)" "$MAKER" 1000e18 \
+        --private-key {{default-private-key}} \
+        --rpc-url {{default-rpc-url}} > /dev/null 2>&1 || echo "   ⚠️ Failed to mint Token0 to Maker"
+    
+    echo "   Minting 1000 Token0 to Taker..."
+    cast send "$TOKEN0_ADDR" \
+        "mint(address,uint256)" "$TAKER" 1000e18 \
+        --private-key {{default-private-key}} \
+        --rpc-url {{default-rpc-url}} > /dev/null 2>&1 || echo "   ⚠️ Failed to mint Token0 to Taker"
+    
+    echo "   Minting 1000 Token1 to Maker..."
+    cast send "$TOKEN1_ADDR" \
+        "mint(address,uint256)" "$MAKER" 1000e18 \
+        --private-key {{default-private-key}} \
+        --rpc-url {{default-rpc-url}} > /dev/null 2>&1 || echo "   ⚠️ Failed to mint Token1 to Maker"
+    
+    echo "   Minting 1000 Token1 to Taker..."
+    cast send "$TOKEN1_ADDR" \
+        "mint(address,uint256)" "$TAKER" 1000e18 \
+        --private-key {{default-private-key}} \
+        --rpc-url {{default-rpc-url}} > /dev/null 2>&1 || echo "   ⚠️ Failed to mint Token1 to Taker"
+    
+    echo ""
+    echo "✅ Test wallets setup complete!"
+    echo ""
+    echo "💡 Test Accounts:"
+    echo "   Maker: $MAKER"
+    echo "     - 100 ETH"
+    echo "     - 1000 Token0"
+    echo "     - 1000 Token1"
+    echo ""
+    echo "   Taker: $TAKER"
+    echo "     - 100 ETH"
+    echo "     - 1000 Token0"
+    echo "     - 1000 Token1"
+    echo ""
+    echo "💡 Default deployer account (has 1M test tokens):"
+    echo "   Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+    echo "   Private Key: {{default-private-key}}"
+
+# Deploy contracts to Sepolia testnet (without verifier)
+# Requires: PRIVATE_KEY and INFURA_ETHEREUM_SEPOLIA_RPC environment variables
+# VERIFIER_ADDRESS defaults to the deployed Sepolia verifier, but can be overridden
+# Usage: PRIVATE_KEY=0x... INFURA_ETHEREUM_SEPOLIA_RPC=https://... just sepolia
+sepolia:
+    #!/usr/bin/env bash
+    set -e
+    
+    # Sepolia configuration
+    SEPOLIA_CHAIN_ID="11155111"
+    DEFAULT_VERIFIER_ADDRESS="0x3743ACA8228D72448964F984D0b859b090a9f138"
+    
+    # Check if PRIVATE_KEY is set
+    if [ -z "$PRIVATE_KEY" ]; then
+        echo "❌ Error: PRIVATE_KEY environment variable is required"
+        echo ""
+        echo "   Usage: PRIVATE_KEY=0x... INFURA_ETHEREUM_SEPOLIA_RPC=https://... just sepolia"
+        echo ""
+        exit 1
+    fi
+    
+    # Check if INFURA_ETHEREUM_SEPOLIA_RPC is set
+    if [ -z "$INFURA_ETHEREUM_SEPOLIA_RPC" ]; then
+        echo "❌ Error: INFURA_ETHEREUM_SEPOLIA_RPC environment variable is required"
+        echo ""
+        echo "   Usage: PRIVATE_KEY=0x... INFURA_ETHEREUM_SEPOLIA_RPC=https://... just sepolia"
+        echo ""
+        exit 1
+    fi
+    
+    # Use provided VERIFIER_ADDRESS or default to Sepolia verifier
+    VERIFIER_ADDRESS="${VERIFIER_ADDRESS:-$DEFAULT_VERIFIER_ADDRESS}"
+    
+    SEPOLIA_RPC_URL="$INFURA_ETHEREUM_SEPOLIA_RPC"
+    
+    just build
+    
+    echo "🚀 Deploying contracts to Sepolia testnet (without verifier)..."
+    echo "   Chain ID: $SEPOLIA_CHAIN_ID"
+    echo "   RPC URL: $SEPOLIA_RPC_URL"
+    echo "   Using existing Verifier: $VERIFIER_ADDRESS"
+    echo ""
+    
+    # Deploy contracts (using existing verifier)
+    export VERIFIER_ADDRESS
+    forge script script/DeploySepolia.s.sol:DeploySepoliaScript \
+        --rpc-url "$SEPOLIA_RPC_URL" \
+        --broadcast \
+        --private-key "$PRIVATE_KEY"
+    
+    echo ""
+    echo "📋 Extracting contract addresses from broadcast files..."
+    
+    # Extract addresses from broadcast JSON
+    BROADCAST_FILE="broadcast/DeploySepolia.s.sol/$SEPOLIA_CHAIN_ID/run-latest.json"
+    
+    if [ ! -f "$BROADCAST_FILE" ]; then
+        echo "❌ Error: Broadcast file not found: $BROADCAST_FILE"
+        exit 1
+    fi
+    
+    # Extract addresses - get all CREATE transactions first
+    # Note: Verifier is NOT deployed, we use the existing one from VERIFIER_ADDRESS
+    VERIFIER_ADDR="$VERIFIER_ADDRESS"
+    
+    # DegenRPS
+    DEGEN_RPS_ADDR=$(jq -r '.transactions[] | select(.contractName == "DegenRPS" and (.transactionType == "CREATE" or .transactionType == "CREATE2")) | .contractAddress' "$BROADCAST_FILE" 2>/dev/null | head -1)
+    
+    # Tokens - get all MockERC20 CREATE transactions
+    TOKEN_ADDRS=($(jq -r '.transactions[] | select(.contractName == "MockERC20" and (.transactionType == "CREATE" or .transactionType == "CREATE2")) | .contractAddress' "$BROADCAST_FILE" 2>/dev/null))
+    TOKEN0_ADDR="${TOKEN_ADDRS[0]}"
+    TOKEN1_ADDR="${TOKEN_ADDRS[1]}"
+    
+    # Get block numbers (verifier block is 0 since we didn't deploy it)
+    VERIFIER_BLOCK="0"
+    DEGEN_RPS_BLOCK=$(jq -r --arg addr "$DEGEN_RPS_ADDR" '.receipts[] | select(.contractAddress == $addr) | .blockNumber' "$BROADCAST_FILE" 2>/dev/null | head -1 || echo "0")
+    TOKEN0_BLOCK=$(jq -r --arg addr "$TOKEN0_ADDR" '.receipts[] | select(.contractAddress == $addr) | .blockNumber' "$BROADCAST_FILE" 2>/dev/null | head -1 || echo "0")
+    TOKEN1_BLOCK=$(jq -r --arg addr "$TOKEN1_ADDR" '.receipts[] | select(.contractAddress == $addr) | .blockNumber' "$BROADCAST_FILE" 2>/dev/null | head -1 || echo "0")
+    
+    # Convert hex to decimal
+    DEGEN_RPS_BLOCK=$(printf "%d" "$DEGEN_RPS_BLOCK" 2>/dev/null || echo "0")
+    TOKEN0_BLOCK=$(printf "%d" "$TOKEN0_BLOCK" 2>/dev/null || echo "0")
+    TOKEN1_BLOCK=$(printf "%d" "$TOKEN1_BLOCK" 2>/dev/null || echo "0")
+    
+    if [ -z "$DEGEN_RPS_ADDR" ] || [ -z "$TOKEN0_ADDR" ] || [ -z "$TOKEN1_ADDR" ]; then
+        echo "❌ Error: Could not extract all contract addresses"
+        echo "   DegenRPS: $DEGEN_RPS_ADDR"
+        echo "   Token0: $TOKEN0_ADDR"
+        echo "   Token1: $TOKEN1_ADDR"
+        exit 1
+    fi
+    
+    echo "✅ Extracted addresses:"
+    echo "   Verifier (existing):  $VERIFIER_ADDR"
+    echo "   DegenRPS:  $DEGEN_RPS_ADDR"
+    echo "   Token0:    $TOKEN0_ADDR"
+    echo "   Token1:    $TOKEN1_ADDR"
+    echo ""
+    
+    # Update deployments.json with addresses and ABIs
+    echo "📝 Updating frontend/deployments.json..."
+    
+    # Initialize or update deployments.json with Sepolia chain info
+    if [ ! -f {{deployments-file}} ]; then
+        echo "{\"chainId\": \"$SEPOLIA_CHAIN_ID\", \"rpcUrl\": \"$SEPOLIA_RPC_URL\", \"contracts\": {}}" > {{deployments-file}}
+    fi
+    
+    # Update chainId and rpcUrl
+    jq ".chainId = \"$SEPOLIA_CHAIN_ID\" | .rpcUrl = \"$SEPOLIA_RPC_URL\" | .contracts = (.contracts // {})" {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+    
+    # Save Verifier (ABI from compiled contract, but address from env var)
+    VERIFIER_ABI="[]"
+    if [ -f "out/Verifier.sol/HonkVerifier.json" ]; then
+        VERIFIER_ABI=$(jq -c '.abi' "out/Verifier.sol/HonkVerifier.json" 2>/dev/null || echo "[]")
+    fi
+    jq --arg key "verifier" \
+       --arg addr "$VERIFIER_ADDR" \
+       --argjson abi "$VERIFIER_ABI" \
+       --arg block "$VERIFIER_BLOCK" \
+       '.contracts[$key] = {
+         address: $addr,
+         abi: $abi,
+         blockNumber: ($block | tonumber)
+       }' {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+    
+    # Save DegenRPS (ABI from compiled contract)
+    DEGEN_RPS_ABI="[]"
+    if [ -f "out/DegenRPS.sol/DegenRPS.json" ]; then
+        DEGEN_RPS_ABI=$(jq -c '.abi' "out/DegenRPS.sol/DegenRPS.json" 2>/dev/null || echo "[]")
+    fi
+    jq --arg key "degenRPS" \
+       --arg addr "$DEGEN_RPS_ADDR" \
+       --argjson abi "$DEGEN_RPS_ABI" \
+       --arg block "$DEGEN_RPS_BLOCK" \
+       '.contracts[$key] = {
+         address: $addr,
+         abi: $abi,
+         blockNumber: ($block | tonumber)
+       }' {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+    
+    # Save Token0 (ABI from compiled contract - MockERC20)
+    TOKEN0_ABI="[]"
+    if [ -f "out/MockERC20.sol/MockERC20.json" ]; then
+        TOKEN0_ABI=$(jq -c '.abi' "out/MockERC20.sol/MockERC20.json" 2>/dev/null || echo "[]")
+    fi
+    jq --arg key "token0" \
+       --arg addr "$TOKEN0_ADDR" \
+       --argjson abi "$TOKEN0_ABI" \
+       --arg block "$TOKEN0_BLOCK" \
+       '.contracts[$key] = {
+         address: $addr,
+         abi: $abi,
+         blockNumber: ($block | tonumber)
+       }' {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+    
+    # Save Token1 (ABI from compiled contract - MockERC20)
+    TOKEN1_ABI="[]"
+    if [ -f "out/MockERC20.sol/MockERC20.json" ]; then
+        TOKEN1_ABI=$(jq -c '.abi' "out/MockERC20.sol/MockERC20.json" 2>/dev/null || echo "[]")
+    fi
+    jq --arg key "token1" \
+       --arg addr "$TOKEN1_ADDR" \
+       --argjson abi "$TOKEN1_ABI" \
+       --arg block "$TOKEN1_BLOCK" \
+       '.contracts[$key] = {
+         address: $addr,
+         abi: $abi,
+         blockNumber: ($block | tonumber)
+       }' {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+    
+    echo ""
+    echo "✅ Deployment complete! Addresses saved to {{deployments-file}}"
+    echo ""
+    echo "📋 Deployed contracts on Sepolia:"
+    echo "   Verifier (existing):  $VERIFIER_ADDR"
+    echo "   DegenRPS:  $DEGEN_RPS_ADDR"
+    echo "   Token0:    $TOKEN0_ADDR"
+    echo "   Token1:    $TOKEN1_ADDR"
+    echo ""
+    echo "🔗 View on Etherscan:"
+    echo "   Verifier:  https://sepolia.etherscan.io/address/$VERIFIER_ADDR"
+    echo "   DegenRPS:  https://sepolia.etherscan.io/address/$DEGEN_RPS_ADDR"
+    echo "   Token0:    https://sepolia.etherscan.io/address/$TOKEN0_ADDR"
+    echo "   Token1:    https://sepolia.etherscan.io/address/$TOKEN1_ADDR"
+
+# Deploy all contracts to Sepolia testnet
+# Requires: PRIVATE_KEY and INFURA_ETHEREUM_SEPOLIA_RPC environment variables
+# Usage: PRIVATE_KEY=0x... just deploy-arbitrum
+deploy-sepolia:
+    #!/usr/bin/env bash
+    set -e
+    
+    # Sepolia configuration
+    SEPOLIA_CHAIN_ID="11155111"
+    
+    # Check if PRIVATE_KEY is set
+    if [ -z "$PRIVATE_KEY" ]; then
+        echo "❌ Error: PRIVATE_KEY environment variable is required"
+        echo ""
+        echo "   Usage: PRIVATE_KEY=0x... just deploy-arbitrum"
+        echo ""
+        exit 1
+    fi
+    
+    # Check if INFURA_ETHEREUM_SEPOLIA_RPC is set
+    if [ -z "$INFURA_ETHEREUM_SEPOLIA_RPC" ]; then
+        echo "❌ Error: INFURA_ETHEREUM_SEPOLIA_RPC environment variable is required"
+        echo ""
+        echo "   Usage: INFURA_ETHEREUM_SEPOLIA_RPC=https://... PRIVATE_KEY=0x... just deploy-arbitrum"
+        echo ""
+        exit 1
+    fi
+    
+    SEPOLIA_RPC_URL="$INFURA_ETHEREUM_SEPOLIA_RPC"
+    
+    just build
+    
+    echo "🚀 Deploying contracts to Sepolia testnet..."
+    echo "   Chain ID: $SEPOLIA_CHAIN_ID"
+    echo "   RPC URL: $SEPOLIA_RPC_URL"
+    echo ""
+    
+    # Deploy contracts
+    forge script script/Deploy.s.sol:DeployScript \
+        --rpc-url "$SEPOLIA_RPC_URL" \
+        --broadcast \
+        --private-key "$PRIVATE_KEY"
+    
+    echo ""
+    echo "📋 Extracting contract addresses from broadcast files..."
+    
+    # Extract addresses from broadcast JSON
+    BROADCAST_FILE="broadcast/Deploy.s.sol/$SEPOLIA_CHAIN_ID/run-latest.json"
+    
+    if [ ! -f "$BROADCAST_FILE" ]; then
+        echo "❌ Error: Broadcast file not found: $BROADCAST_FILE"
+        exit 1
+    fi
+    
+    # Extract addresses - get all CREATE transactions first
+    # Verifier
+    VERIFIER_ADDR=$(jq -r '.transactions[] | select(.contractName == "HonkVerifier" and (.transactionType == "CREATE" or .transactionType == "CREATE2")) | .contractAddress' "$BROADCAST_FILE" 2>/dev/null | head -1)
+    
+    # DegenRPS
+    DEGEN_RPS_ADDR=$(jq -r '.transactions[] | select(.contractName == "DegenRPS" and (.transactionType == "CREATE" or .transactionType == "CREATE2")) | .contractAddress' "$BROADCAST_FILE" 2>/dev/null | head -1)
+    
+    # Tokens - get all MockERC20 CREATE transactions
+    TOKEN_ADDRS=($(jq -r '.transactions[] | select(.contractName == "MockERC20" and (.transactionType == "CREATE" or .transactionType == "CREATE2")) | .contractAddress' "$BROADCAST_FILE" 2>/dev/null))
+    TOKEN0_ADDR="${TOKEN_ADDRS[0]}"
+    TOKEN1_ADDR="${TOKEN_ADDRS[1]}"
+    
+    # Get block numbers
+    VERIFIER_BLOCK=$(jq -r --arg addr "$VERIFIER_ADDR" '.receipts[] | select(.contractAddress == $addr) | .blockNumber' "$BROADCAST_FILE" 2>/dev/null | head -1 || echo "0")
+    DEGEN_RPS_BLOCK=$(jq -r --arg addr "$DEGEN_RPS_ADDR" '.receipts[] | select(.contractAddress == $addr) | .blockNumber' "$BROADCAST_FILE" 2>/dev/null | head -1 || echo "0")
+    TOKEN0_BLOCK=$(jq -r --arg addr "$TOKEN0_ADDR" '.receipts[] | select(.contractAddress == $addr) | .blockNumber' "$BROADCAST_FILE" 2>/dev/null | head -1 || echo "0")
+    TOKEN1_BLOCK=$(jq -r --arg addr "$TOKEN1_ADDR" '.receipts[] | select(.contractAddress == $addr) | .blockNumber' "$BROADCAST_FILE" 2>/dev/null | head -1 || echo "0")
+    
+    # Convert hex to decimal
+    VERIFIER_BLOCK=$(printf "%d" "$VERIFIER_BLOCK" 2>/dev/null || echo "0")
+    DEGEN_RPS_BLOCK=$(printf "%d" "$DEGEN_RPS_BLOCK" 2>/dev/null || echo "0")
+    TOKEN0_BLOCK=$(printf "%d" "$TOKEN0_BLOCK" 2>/dev/null || echo "0")
+    TOKEN1_BLOCK=$(printf "%d" "$TOKEN1_BLOCK" 2>/dev/null || echo "0")
+    
+    if [ -z "$VERIFIER_ADDR" ] || [ -z "$DEGEN_RPS_ADDR" ] || [ -z "$TOKEN0_ADDR" ] || [ -z "$TOKEN1_ADDR" ]; then
+        echo "❌ Error: Could not extract all contract addresses"
+        echo "   Verifier: $VERIFIER_ADDR"
+        echo "   DegenRPS: $DEGEN_RPS_ADDR"
+        echo "   Token0: $TOKEN0_ADDR"
+        echo "   Token1: $TOKEN1_ADDR"
+        exit 1
+    fi
+    
+    echo "✅ Extracted addresses:"
+    echo "   Verifier:  $VERIFIER_ADDR"
+    echo "   DegenRPS:  $DEGEN_RPS_ADDR"
+    echo "   Token0:    $TOKEN0_ADDR"
+    echo "   Token1:    $TOKEN1_ADDR"
+    echo ""
+    
+    # Update deployments.json with addresses and ABIs
+    echo "📝 Updating frontend/deployments.json..."
+    
+    # Initialize or update deployments.json with Sepolia chain info
+    if [ ! -f {{deployments-file}} ]; then
+        echo "{\"chainId\": \"$SEPOLIA_CHAIN_ID\", \"rpcUrl\": \"$SEPOLIA_RPC_URL\", \"contracts\": {}}" > {{deployments-file}}
+    fi
+    
+    # Update chainId and rpcUrl
+    jq ".chainId = \"$SEPOLIA_CHAIN_ID\" | .rpcUrl = \"$SEPOLIA_RPC_URL\" | .contracts = (.contracts // {})" {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+    
+    # Save Verifier (ABI from compiled contract)
+    VERIFIER_ABI="[]"
+    if [ -f "out/Verifier.sol/HonkVerifier.json" ]; then
+        VERIFIER_ABI=$(jq -c '.abi' "out/Verifier.sol/HonkVerifier.json" 2>/dev/null || echo "[]")
+    fi
+    jq --arg key "verifier" \
+       --arg addr "$VERIFIER_ADDR" \
+       --argjson abi "$VERIFIER_ABI" \
+       --arg block "$VERIFIER_BLOCK" \
+       '.contracts[$key] = {
+         address: $addr,
+         abi: $abi,
+         blockNumber: ($block | tonumber)
+       }' {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+    
+    # Save DegenRPS (ABI from compiled contract)
+    DEGEN_RPS_ABI="[]"
+    if [ -f "out/DegenRPS.sol/DegenRPS.json" ]; then
+        DEGEN_RPS_ABI=$(jq -c '.abi' "out/DegenRPS.sol/DegenRPS.json" 2>/dev/null || echo "[]")
+    fi
+    jq --arg key "degenRPS" \
+       --arg addr "$DEGEN_RPS_ADDR" \
+       --argjson abi "$DEGEN_RPS_ABI" \
+       --arg block "$DEGEN_RPS_BLOCK" \
+       '.contracts[$key] = {
+         address: $addr,
+         abi: $abi,
+         blockNumber: ($block | tonumber)
+       }' {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+    
+    # Save Token0 (ABI from compiled contract - MockERC20)
+    TOKEN0_ABI="[]"
+    if [ -f "out/MockERC20.sol/MockERC20.json" ]; then
+        TOKEN0_ABI=$(jq -c '.abi' "out/MockERC20.sol/MockERC20.json" 2>/dev/null || echo "[]")
+    fi
+    jq --arg key "token0" \
+       --arg addr "$TOKEN0_ADDR" \
+       --argjson abi "$TOKEN0_ABI" \
+       --arg block "$TOKEN0_BLOCK" \
+       '.contracts[$key] = {
+         address: $addr,
+         abi: $abi,
+         blockNumber: ($block | tonumber)
+       }' {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+    
+    # Save Token1 (ABI from compiled contract - MockERC20)
+    TOKEN1_ABI="[]"
+    if [ -f "out/MockERC20.sol/MockERC20.json" ]; then
+        TOKEN1_ABI=$(jq -c '.abi' "out/MockERC20.sol/MockERC20.json" 2>/dev/null || echo "[]")
+    fi
+    jq --arg key "token1" \
+       --arg addr "$TOKEN1_ADDR" \
+       --argjson abi "$TOKEN1_ABI" \
+       --arg block "$TOKEN1_BLOCK" \
+       '.contracts[$key] = {
+         address: $addr,
+         abi: $abi,
+         blockNumber: ($block | tonumber)
+       }' {{deployments-file}} > {{deployments-file}}.tmp && mv {{deployments-file}}.tmp {{deployments-file}}
+    
+    echo ""
+    echo "✅ Deployment complete! Addresses saved to {{deployments-file}}"
+    echo ""
+    echo "📋 Deployed contracts on Sepolia:"
+    echo "   Verifier:  $VERIFIER_ADDR"
+    echo "   DegenRPS:  $DEGEN_RPS_ADDR"
+    echo "   Token0:    $TOKEN0_ADDR"
+    echo "   Token1:    $TOKEN1_ADDR"
+    echo ""
+    echo "🔗 View on Etherscan:"
+    echo "   Verifier:  https://sepolia.etherscan.io/address/$VERIFIER_ADDR"
+    echo "   DegenRPS:  https://sepolia.etherscan.io/address/$DEGEN_RPS_ADDR"
+    echo "   Token0:    https://sepolia.etherscan.io/address/$TOKEN0_ADDR"
+    echo "   Token1:    https://sepolia.etherscan.io/address/$TOKEN1_ADDR"
+
+# Show all deployed addresses
+show-addresses:
+    #!/usr/bin/env bash
+    if [ -f {{deployments-file}} ]; then
+        echo "=== Deployed Contract Addresses ==="
+        echo ""
+        cat {{deployments-file}} | jq '.contracts | to_entries | map({key: .key, address: .value.address}) | from_entries'
+    else
+        echo "No deployments found. Run 'just deploy' first."
+    fi
+
+# ============================================================================
+# Testing
+# ============================================================================
+
+# Run tests
+test:
+    @echo "🧪 Running tests..."
+    forge test
+
+# Run tests with verbose output
+test-verbose:
+    @echo "🧪 Running tests with verbose output..."
+    forge test -vvv
+
+# Run a specific test
+test-match pattern:
+    @echo "🧪 Running tests matching: {{pattern}}"
+    forge test --match-test {{pattern}}
+
+# ============================================================================
+# Anvil Management
+# ============================================================================
+
+# Start Anvil in the background
+anvil-start:
+    @echo "🚀 Starting Anvil..."
+    @anvil > /tmp/anvil.log 2>&1 &
+    @echo "✅ Anvil started"
+    @echo "   Logs: /tmp/anvil.log"
+    @echo "   Stop with: just anvil-stop"
+
+# Stop Anvil
+anvil-stop:
+    @echo "🛑 Stopping Anvil..."
+    @pkill -f "anvil" || echo "Anvil not running"
+    @echo "✅ Anvil stopped"
+
+# Show Anvil logs
+anvil-logs:
+    @tail -f /tmp/anvil.log
+
+# ============================================================================
+# Query Commands
+# ============================================================================
+
+# Get next game ID
+next-game-id:
+    #!/usr/bin/env bash
+    DEGEN_RPS_ADDR=$(just _get-address degenRPS)
+    if [ -z "$DEGEN_RPS_ADDR" ]; then
+        echo "❌ DegenRPS address not found. Run 'just deploy' first."
+        exit 1
+    fi
+    echo "📋 Next game ID:"
+    cast call "$DEGEN_RPS_ADDR" "nextGameId()" --rpc-url {{default-rpc-url}}
+
+# Get game info
+# Usage: just get-game <game_id>
+get-game game_id:
+    #!/usr/bin/env bash
+    DEGEN_RPS_ADDR=$(just _get-address degenRPS)
+    if [ -z "$DEGEN_RPS_ADDR" ]; then
+        echo "❌ DegenRPS address not found. Run 'just deploy' first."
+        exit 1
+    fi
+    echo "📋 Game {{game_id}} info:"
+    cast call "$DEGEN_RPS_ADDR" "getGame(uint256)" {{game_id}} --rpc-url {{default-rpc-url}}
+
+# Get games waiting for Player 2
+games-waiting:
+    #!/usr/bin/env bash
+    DEGEN_RPS_ADDR=$(just _get-address degenRPS)
+    if [ -z "$DEGEN_RPS_ADDR" ]; then
+        echo "❌ DegenRPS address not found. Run 'just deploy' first."
+        exit 1
+    fi
+    echo "📋 Games waiting for Player 2:"
+    cast call "$DEGEN_RPS_ADDR" "getGamesWaitingForPlayer2()" --rpc-url {{default-rpc-url}}
+
+# Get games awaiting reveal with full details
+games-awaiting-reveal:
+    #!/usr/bin/env bash
+    set -e
+    
+    DEGEN_RPS_ADDR=$(just _get-address degenRPS)
+    if [ -z "$DEGEN_RPS_ADDR" ]; then
+        echo "❌ DegenRPS address not found. Run 'just deploy' first."
+        exit 1
+    fi
+    
+    echo "🔍 Fetching games awaiting reveal..."
+    echo ""
+    
+    # Get game IDs awaiting reveal
+    GAME_IDS=$(cast call "$DEGEN_RPS_ADDR" "getGamesWaitingForReveal()" --rpc-url {{default-rpc-url}} 2>/dev/null | sed 's/^\[\(.*\)\]$/\1/' | tr ',' ' ')
+    
+    if [ -z "$GAME_IDS" ] || [ "$GAME_IDS" = "()" ]; then
+        echo "📭 No games awaiting reveal."
+        exit 0
+    fi
+    
+    # Convert space-separated to array
+    GAME_IDS_ARRAY=($GAME_IDS)
+    
+    if [ ${#GAME_IDS_ARRAY[@]} -eq 0 ]; then
+        echo "📭 No games awaiting reveal."
+        exit 0
+    fi
+    
+    echo "📋 Found ${#GAME_IDS_ARRAY[@]} game(s) awaiting reveal:"
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════════════════════"
+    echo ""
+    
+    # Function to convert move enum to string
+    move_to_string() {
+        case "$1" in
+            0) echo "None" ;;
+            1) echo "Rock" ;;
+            2) echo "Paper" ;;
+            3) echo "Scissors" ;;
+            *) echo "Unknown($1)" ;;
+        esac
+    }
+    
+    # Function to format timestamp
+    format_timestamp() {
+        if [ "$1" = "0" ] || [ -z "$1" ]; then
+            echo "N/A"
+        else
+            # Convert hex to decimal if needed
+            TS=$(printf "%d" "$1" 2>/dev/null || echo "$1")
+            date -d "@$TS" 2>/dev/null || echo "$TS (unix timestamp)"
+        fi
+    }
+    
+    # Function to format address (shorten)
+    shorten_addr() {
+        echo "$1" | sed 's/\(0x[0-9a-fA-F]\{6\}\).*\([0-9a-fA-F]\{4\}\)/\1...\2/'
+    }
+    
+    # Function to format token amount (assuming 18 decimals)
+    format_amount() {
+        # Remove 0x prefix if present and convert hex to decimal
+        AMT=$(echo "$1" | sed 's/^0x//')
+        if [ -n "$AMT" ] && [ "$AMT" != "0" ]; then
+            # Use bc or python to divide by 10^18
+            python3 -c "print('{:.6f}'.format(int('$AMT', 16) / 10**18))" 2>/dev/null || echo "$AMT"
+        else
+            echo "0"
+        fi
+    }
+    
+    # Process each game
+    for GAME_ID in "${GAME_IDS_ARRAY[@]}"; do
+        # Clean up game ID (remove quotes, spaces, etc)
+        GAME_ID=$(echo "$GAME_ID" | tr -d '[:space:]"')
+        
+        if [ -z "$GAME_ID" ] || [ "$GAME_ID" = "()" ]; then
+            continue
+        fi
+        
+        echo "🎮 Game ID: $GAME_ID"
+        echo "───────────────────────────────────────────────────────────────────────────────"
+        
+        # Get game data - returns tuple: (player1, player2, token, betAmount, commitment, proof, player2Move, player1Move, state, createdAt, revealDeadline, winner)
+        GAME_DATA=$(cast call "$DEGEN_RPS_ADDR" "getGame(uint256)" "$GAME_ID" --rpc-url {{default-rpc-url}} 2>/dev/null)
+        
+        if [ -z "$GAME_DATA" ]; then
+            echo "  ⚠️  Could not fetch game data"
+            echo ""
+            continue
+        fi
+        
+        # Parse the tuple - use cast with --json for easier parsing
+        GAME_DATA_JSON=$(cast call "$DEGEN_RPS_ADDR" "getGame(uint256)" "$GAME_ID" --rpc-url {{default-rpc-url}} --json 2>/dev/null || echo "")
+        
+        if [ -n "$GAME_DATA_JSON" ] && echo "$GAME_DATA_JSON" | jq . >/dev/null 2>&1; then
+            # JSON format from cast --json
+            PLAYER1=$(echo "$GAME_DATA_JSON" | jq -r '.[0]')
+            PLAYER2=$(echo "$GAME_DATA_JSON" | jq -r '.[1]')
+            TOKEN=$(echo "$GAME_DATA_JSON" | jq -r '.[2]')
+            BET_AMOUNT=$(echo "$GAME_DATA_JSON" | jq -r '.[3]')
+            COMMITMENT=$(echo "$GAME_DATA_JSON" | jq -r '.[4]')
+            PLAYER2_MOVE=$(echo "$GAME_DATA_JSON" | jq -r '.[6]')
+            PLAYER1_MOVE=$(echo "$GAME_DATA_JSON" | jq -r '.[7]')
+            STATE=$(echo "$GAME_DATA_JSON" | jq -r '.[8]')
+            CREATED_AT=$(echo "$GAME_DATA_JSON" | jq -r '.[9]')
+            REVEAL_DEADLINE=$(echo "$GAME_DATA_JSON" | jq -r '.[10]')
+            WINNER=$(echo "$GAME_DATA_JSON" | jq -r '.[11]')
+        else
+            # Fallback: parse space-separated tuple format
+            GAME_DATA_CLEAN=$(echo "$GAME_DATA" | sed 's/^(\(.*\))$/\1/' | sed 's/^\[\(.*\)\]$/\1/')
+            read -r PLAYER1 PLAYER2 TOKEN BET_AMOUNT COMMITMENT _PROOF PLAYER2_MOVE PLAYER1_MOVE STATE CREATED_AT REVEAL_DEADLINE WINNER <<< "$GAME_DATA_CLEAN"
+        fi
+        
+        # Convert move enums
+        PLAYER2_MOVE_STR=$(move_to_string "$PLAYER2_MOVE")
+        PLAYER1_MOVE_STR=$(move_to_string "$PLAYER1_MOVE")
+        
+        # Format timestamps
+        CREATED_AT_STR=$(format_timestamp "$CREATED_AT")
+        REVEAL_DEADLINE_STR=$(format_timestamp "$REVEAL_DEADLINE")
+        
+        # Format bet amount
+        BET_AMOUNT_STR=$(format_amount "$BET_AMOUNT")
+        
+        # Get token symbol if possible
+        TOKEN_SYMBOL=$(cast call "$TOKEN" "symbol()" --rpc-url {{default-rpc-url}} 2>/dev/null || echo "TOKEN")
+        
+        echo "  👤 Player 1 (Maker):  $(shorten_addr "$PLAYER1")"
+        echo "  👤 Player 2 (Taker):  $(shorten_addr "$PLAYER2")"
+        echo "  🪙 Token:             $(shorten_addr "$TOKEN") ($TOKEN_SYMBOL)"
+        echo "  💰 Bet Amount:        $BET_AMOUNT_STR $TOKEN_SYMBOL"
+        echo "  🔒 Commitment:        $(shorten_addr "$COMMITMENT")"
+        echo "  ✊ Player 2 Move:     $PLAYER2_MOVE_STR"
+        echo "  ❓ Player 1 Move:     Hidden (awaiting reveal)"
+        echo "  📅 Created At:        $CREATED_AT_STR"
+        echo "  ⏰ Reveal Deadline:   $REVEAL_DEADLINE_STR"
+        echo ""
+    done
+    
+    echo "═══════════════════════════════════════════════════════════════════════════════"
+
+# Get settled games with outcomes and full details
+games-settled:
+    #!/usr/bin/env bash
+    set -e
+    
+    DEGEN_RPS_ADDR=$(just _get-address degenRPS)
+    if [ -z "$DEGEN_RPS_ADDR" ]; then
+        echo "❌ DegenRPS address not found. Run 'just deploy' first."
+        exit 1
+    fi
+    
+    echo "🔍 Fetching settled games..."
+    echo ""
+    
+    # Get next game ID to know how many games exist
+    NEXT_GAME_ID=$(cast call "$DEGEN_RPS_ADDR" "nextGameId()" --rpc-url {{default-rpc-url}} 2>/dev/null)
+    NEXT_GAME_ID=$(printf "%d" "$NEXT_GAME_ID" 2>/dev/null || echo "0")
+    
+    if [ "$NEXT_GAME_ID" = "0" ]; then
+        echo "📭 No games found."
+        exit 0
+    fi
+    
+    echo "📋 Checking games 0 to $((NEXT_GAME_ID - 1)) for settled games..."
+    echo ""
+    
+    # Function to convert move enum to string
+    move_to_string() {
+        case "$1" in
+            0) echo "None" ;;
+            1) echo "Rock" ;;
+            2) echo "Paper" ;;
+            3) echo "Scissors" ;;
+            *) echo "Unknown($1)" ;;
+        esac
+    }
+    
+    # Function to format timestamp
+    format_timestamp() {
+        if [ "$1" = "0" ] || [ -z "$1" ]; then
+            echo "N/A"
+        else
+            # Convert hex to decimal if needed
+            TS=$(printf "%d" "$1" 2>/dev/null || echo "$1")
+            date -d "@$TS" 2>/dev/null || echo "$TS (unix timestamp)"
+        fi
+    }
+    
+    # Function to format address (shorten)
+    shorten_addr() {
+        echo "$1" | sed 's/\(0x[0-9a-fA-F]\{6\}\).*\([0-9a-fA-F]\{4\}\)/\1...\2/'
+    }
+    
+    # Function to format token amount (assuming 18 decimals)
+    format_amount() {
+        # Remove 0x prefix if present and convert hex to decimal
+        AMT=$(echo "$1" | sed 's/^0x//')
+        if [ -n "$AMT" ] && [ "$AMT" != "0" ]; then
+            # Use python to divide by 10^18
+            python3 -c "print('{:.6f}'.format(int('$AMT', 16) / 10**18))" 2>/dev/null || echo "$AMT"
+        else
+            echo "0"
+        fi
+    }
+    
+    SETTLED_COUNT=0
+    
+    # Check each game
+    for ((i=0; i<NEXT_GAME_ID; i++)); do
+        # Get game data
+        GAME_DATA=$(cast call "$DEGEN_RPS_ADDR" "getGame(uint256)" "$i" --rpc-url {{default-rpc-url}} 2>/dev/null)
+        
+        if [ -z "$GAME_DATA" ]; then
+            continue
+        fi
+        
+        # Parse the tuple - use cast with --json for easier parsing
+        GAME_DATA_JSON=$(cast call "$DEGEN_RPS_ADDR" "getGame(uint256)" "$i" --rpc-url {{default-rpc-url}} --json 2>/dev/null || echo "")
+        
+        if [ -n "$GAME_DATA_JSON" ] && echo "$GAME_DATA_JSON" | jq . >/dev/null 2>&1; then
+            # JSON format from cast --json
+            STATE=$(echo "$GAME_DATA_JSON" | jq -r '.[8]')
+        else
+            # Fallback: parse space-separated tuple format
+            GAME_DATA_CLEAN=$(echo "$GAME_DATA" | sed 's/^(\(.*\))$/\1/' | sed 's/^\[\(.*\)\]$/\1/')
+            read -r _P1 _P2 _T _B _C _PROOF _P2M _P1M STATE _CA _RD _W <<< "$GAME_DATA_CLEAN"
+        fi
+        
+        # State 2 = Settled
+        if [ "$STATE" != "2" ]; then
+            continue
+        fi
+        
+        SETTLED_COUNT=$((SETTLED_COUNT + 1))
+        
+        # Parse all game data
+        if [ -n "$GAME_DATA_JSON" ] && echo "$GAME_DATA_JSON" | jq . >/dev/null 2>&1; then
+            # JSON format from cast --json
+            PLAYER1=$(echo "$GAME_DATA_JSON" | jq -r '.[0]')
+            PLAYER2=$(echo "$GAME_DATA_JSON" | jq -r '.[1]')
+            TOKEN=$(echo "$GAME_DATA_JSON" | jq -r '.[2]')
+            BET_AMOUNT=$(echo "$GAME_DATA_JSON" | jq -r '.[3]')
+            COMMITMENT=$(echo "$GAME_DATA_JSON" | jq -r '.[4]')
+            PLAYER2_MOVE=$(echo "$GAME_DATA_JSON" | jq -r '.[6]')
+            PLAYER1_MOVE=$(echo "$GAME_DATA_JSON" | jq -r '.[7]')
+            CREATED_AT=$(echo "$GAME_DATA_JSON" | jq -r '.[9]')
+            REVEAL_DEADLINE=$(echo "$GAME_DATA_JSON" | jq -r '.[10]')
+            WINNER=$(echo "$GAME_DATA_JSON" | jq -r '.[11]')
+        else
+            # Fallback: parse space-separated tuple format
+            GAME_DATA_CLEAN=$(echo "$GAME_DATA" | sed 's/^(\(.*\))$/\1/' | sed 's/^\[\(.*\)\]$/\1/')
+            read -r PLAYER1 PLAYER2 TOKEN BET_AMOUNT COMMITMENT _PROOF PLAYER2_MOVE PLAYER1_MOVE _STATE CREATED_AT REVEAL_DEADLINE WINNER <<< "$GAME_DATA_CLEAN"
+        fi
+        
+        # Skip if player1 is zero address (game doesn't exist)
+        if [ "$PLAYER1" = "0x0000000000000000000000000000000000000000" ] || [ -z "$PLAYER1" ]; then
+            continue
+        fi
+        
+        # Print header for first settled game
+        if [ $SETTLED_COUNT -eq 1 ]; then
+            echo "═══════════════════════════════════════════════════════════════════════════════"
+            echo ""
+        fi
+        
+        # Convert move enums
+        PLAYER2_MOVE_STR=$(move_to_string "$PLAYER2_MOVE")
+        PLAYER1_MOVE_STR=$(move_to_string "$PLAYER1_MOVE")
+        
+        # Format timestamps
+        CREATED_AT_STR=$(format_timestamp "$CREATED_AT")
+        REVEAL_DEADLINE_STR=$(format_timestamp "$REVEAL_DEADLINE")
+        
+        # Format bet amount
+        BET_AMOUNT_STR=$(format_amount "$BET_AMOUNT")
+        # Calculate total prize (bet amount * 2)
+        BET_AMOUNT_DEC=$(echo "$BET_AMOUNT" | sed 's/^0x//')
+        if [ -n "$BET_AMOUNT_DEC" ] && [ "$BET_AMOUNT_DEC" != "0" ]; then
+            TOTAL_PRIZE=$(python3 -c "amt=int('$BET_AMOUNT_DEC', 16); print('{:.6f}'.format(amt * 2 / 10**18))" 2>/dev/null || echo "N/A")
+        else
+            TOTAL_PRIZE="0"
+        fi
+        
+        # Get token symbol
+        TOKEN_SYMBOL=$(cast call "$TOKEN" "symbol()" --rpc-url {{default-rpc-url}} 2>/dev/null || echo "TOKEN")
+        
+        # Determine outcome
+        if [ "$WINNER" = "0x0000000000000000000000000000000000000000" ] || [ -z "$WINNER" ]; then
+            OUTCOME="🤝 TIE - Both players refunded"
+            WINNER_STR="N/A (Tie)"
+        elif [ "$WINNER" = "$PLAYER1" ]; then
+            OUTCOME="🏆 Player 1 (Maker) WINS"
+            WINNER_STR="Player 1"
+        elif [ "$WINNER" = "$PLAYER2" ]; then
+            OUTCOME="🏆 Player 2 (Taker) WINS"
+            WINNER_STR="Player 2"
+        else
+            OUTCOME="❓ Unknown winner"
+            WINNER_STR=$(shorten_addr "$WINNER")
+        fi
+        
+        echo "🎮 Game ID: $i"
+        echo "───────────────────────────────────────────────────────────────────────────────"
+        echo "  $OUTCOME"
+        echo ""
+        echo "  👤 Player 1 (Maker):  $(shorten_addr "$PLAYER1")"
+        echo "     Move: $PLAYER1_MOVE_STR"
+        echo "  👤 Player 2 (Taker):  $(shorten_addr "$PLAYER2")"
+        echo "     Move: $PLAYER2_MOVE_STR"
+        echo ""
+        echo "  🪙 Token:             $(shorten_addr "$TOKEN") ($TOKEN_SYMBOL)"
+        echo "  💰 Bet Amount:        $BET_AMOUNT_STR $TOKEN_SYMBOL (each player)"
+        echo "  🏅 Total Prize Pool:  $TOTAL_PRIZE $TOKEN_SYMBOL"
+        echo "  👑 Winner:            $WINNER_STR"
+        echo "  🔒 Commitment:        $(shorten_addr "$COMMITMENT")"
+        echo "  📅 Created At:        $CREATED_AT_STR"
+        echo "  ⏰ Reveal Deadline:   $REVEAL_DEADLINE_STR"
+        echo ""
+    done
+    
+    if [ $SETTLED_COUNT -eq 0 ]; then
+        echo "📭 No settled games found."
+    else
+        echo "═══════════════════════════════════════════════════════════════════════════════"
+        echo ""
+        echo "📊 Summary: Found $SETTLED_COUNT settled game(s)"
+    fi
+
+# Get token balance
+# Usage: just balance <token_addr> <account>
+balance token_addr account:
+    @echo "💰 Balance of {{account}} in token {{token_addr}}:"
+    @cast call {{token_addr}} "balanceOf(address)" {{account}} --rpc-url {{default-rpc-url}}
+
+# ============================================================================
+# Utility Commands
+# ============================================================================
+
+# ============================================================================
+# Token & Wallet Management
+# ============================================================================
+
+# Mint tokens to an address
+# Usage: just mint-tokens <token_address> <recipient> <amount>
+mint-tokens token_address recipient amount:
+    #!/usr/bin/env bash
+    set -e
+    
+    TOKEN_ADDR="{{token_address}}"
+    RECIPIENT="{{recipient}}"
+    AMOUNT="{{amount}}"
+    
+    echo "💰 Minting {{amount}} tokens to {{recipient}}..."
+    cast send "$TOKEN_ADDR" \
+        "mint(address,uint256)" "$RECIPIENT" "$AMOUNT" \
+        --private-key {{default-private-key}} \
+        --rpc-url {{default-rpc-url}}
+    
+    echo "✅ Minted {{amount}} tokens to {{recipient}}"
+
+# Fund an address with ETH
+# Usage: just fund-eth <recipient> <amount_in_ether>
+fund-eth recipient amount_in_ether:
+    #!/usr/bin/env bash
+    set -e
+    
+    RECIPIENT="{{recipient}}"
+    AMOUNT="{{amount_in_ether}}"
+    
+    echo "💰 Funding {{recipient}} with {{amount_in_ether}} ETH..."
+    cast send "$RECIPIENT" \
+        --value {{amount_in_ether}}ether \
+        --private-key {{default-private-key}} \
+        --rpc-url {{default-rpc-url}}
+    
+    echo "✅ Funded {{recipient}} with {{amount_in_ether}} ETH"
+
+# Setup test wallets: mint tokens and fund with ETH
+# This sets up the default maker and taker wallets for testing
+setup-test-wallets:
+    #!/usr/bin/env bash
+    set -e
+    
+    MAKER="0x2f04d60991191005103d73bdcf12187a824d42a4"
+    TAKER="0x3109f6462af03c604b36664b511a17814ee8acff"
+    
+    # Get token addresses from deployments.json
+    TOKEN0=$(just _get-address token0)
+    TOKEN1=$(just _get-address token1)
+    
+    if [ -z "$TOKEN0" ] || [ -z "$TOKEN1" ]; then
+        echo "❌ Error: Token addresses not found. Run 'just deploy' first."
+        exit 1
+    fi
+    
+    echo "🚀 Setting up test wallets..."
+    echo ""
+    echo "Maker wallet: $MAKER"
+    echo "Taker wallet: $TAKER"
+    echo ""
+    
+    # Fund with ETH
+    echo "📦 Funding wallets with ETH..."
+    just fund-eth "$MAKER" 100
+    just fund-eth "$TAKER" 100
+    echo ""
+    
+    # Mint tokens (1000 tokens with 18 decimals = 1000e18)
+    echo "🪙 Minting tokens..."
+    just mint-tokens "$TOKEN0" "$MAKER" 1000e18
+    just mint-tokens "$TOKEN0" "$TAKER" 1000e18
+    just mint-tokens "$TOKEN1" "$MAKER" 1000e18
+    just mint-tokens "$TOKEN1" "$TAKER" 1000e18
+    echo ""
+    
+    echo "✅ Test wallets setup complete!"
+    echo ""
+    echo "Maker wallet ($MAKER):"
+    echo "  - 100 ETH"
+    echo "  - 1000 Token0"
+    echo "  - 1000 Token1"
+    echo ""
+    echo "Taker wallet ($TAKER):"
+    echo "  - 100 ETH"
+    echo "  - 1000 Token0"
+    echo "  - 1000 Token1"
+
+# Mint tokens to maker wallet
+# Usage: just mint-maker <token_address> <amount>
+mint-maker token_address amount:
+    @just mint-tokens {{token_address}} 0x2f04d60991191005103d73bdcf12187a824d42a4 {{amount}}
+
+# Mint tokens to taker wallet
+# Usage: just mint-taker <token_address> <amount>
+mint-taker token_address amount:
+    @just mint-tokens {{token_address}} 0x3109f6462af03c604b36664b511a17814ee8acff {{amount}}
+
+# Fund maker wallet with ETH
+# Usage: just fund-maker <amount_in_ether>
+fund-maker amount_in_ether:
+    @just fund-eth 0x2f04d60991191005103d73bdcf12187a824d42a4 {{amount_in_ether}}
+
+# Fund taker wallet with ETH
+# Usage: just fund-taker <amount_in_ether>
+fund-taker amount_in_ether:
+    @just fund-eth 0x3109f6462af03c604b36664b511a17814ee8acff {{amount_in_ether}}
+
+# ============================================================================
+# Summary & Status
+# ============================================================================
+
+# Show deployment summary
+summary:
+    #!/usr/bin/env bash
+    echo "📋 DegenRPS Deployment Summary"
+    echo "=============================="
+    echo ""
+    echo "Anvil Status:"
+    if curl -s {{default-rpc-url}} > /dev/null 2>&1; then
+        echo "  ✅ Running"
+    else
+        echo "  ❌ Not running"
+    fi
+    echo ""
+    echo "Contracts Built:"
+    [ -f out/DegenRPS.sol/DegenRPS.json ] && echo "  ✅ DegenRPS" || echo "  ❌ DegenRPS"
+    [ -f out/Verifier.sol/HonkVerifier.json ] && echo "  ✅ Verifier" || echo "  ❌ Verifier"
+    echo ""
+    echo "Deployed Contracts:"
+    if [ -f {{deployments-file}} ]; then
+        VERIFIER=$(just _get-address verifier)
+        DEGEN_RPS=$(just _get-address degenRPS)
+        TOKEN0=$(just _get-address token0)
+        TOKEN1=$(just _get-address token1)
+        [ -n "$VERIFIER" ] && echo "  ✅ Verifier: $VERIFIER" || echo "  ❌ Verifier: Not deployed"
+        [ -n "$DEGEN_RPS" ] && echo "  ✅ DegenRPS: $DEGEN_RPS" || echo "  ❌ DegenRPS: Not deployed"
+        [ -n "$TOKEN0" ] && echo "  ✅ Token0: $TOKEN0" || echo "  ❌ Token0: Not deployed"
+        [ -n "$TOKEN1" ] && echo "  ✅ Token1: $TOKEN1" || echo "  ❌ Token1: Not deployed"
+    else
+        echo "  ❌ No deployments found"
+    fi
+    echo ""
+    echo "Frontend Config:"
+    [ -f {{deployments-file}} ] && echo "  ✅ deployments.json exists" || echo "  ❌ deployments.json missing"
+
+# Full deployment workflow: start anvil, deploy, show summary
+deploy-full:
+    @echo "🚀 Full deployment workflow..."
+    @just anvil-start || true
+    @sleep 2
+    @just deploy
+    @echo ""
+    @just summary
