@@ -1,9 +1,9 @@
 {
-  "chainId": "31337",
-  "rpcUrl": "http://localhost:8545",
+  "chainId": "11155111",
+  "rpcUrl": "https://sepolia.infura.io/v3/4656866d4b76456fb395cd6c1b744830",
   "contracts": {
     "token0": {
-      "address": "0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0",
+      "address": "0xf0711ae8902822c8fa99f93e4d6db436d065c609",
       "abi": [
         {
           "type": "constructor",
@@ -360,10 +360,10 @@
           "anonymous": false
         }
       ],
-      "blockNumber": 2
+      "blockNumber": 9615514
     },
     "token1": {
-      "address": "0xcf7ed3acca5a467e9e704c703e8d87f634fb0fc9",
+      "address": "0x83696c189589910d08640cf1c285e3b15eceefb7",
       "abi": [
         {
           "type": "constructor",
@@ -720,7 +720,7 @@
           "anonymous": false
         }
       ],
-      "blockNumber": 3
+      "blockNumber": 9615514
     },
     "poolManager": {
       "address": "0x0d9baf34817fccd3b3068768e5d20542b66424a5",
@@ -2848,7 +2848,7 @@
       "blockNumber": 7
     },
     "verifier": {
-      "address": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+      "address": "0x3743ACA8228D72448964F984D0b859b090a9f138",
       "abi": [
         {
           "type": "function",
@@ -2895,7 +2895,7 @@
           "inputs": []
         }
       ],
-      "blockNumber": 1
+      "blockNumber": 0
     },
     "rockPaperScissors": {
       "address": "0xa51c1fc2f0d1a1b8494ed1fe312d7c3a78ed91c0",
@@ -3369,7 +3369,7 @@
       "blockNumber": 9
     },
     "degenRPS": {
-      "address": "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512",
+      "address": "0xfa214576764c87d21acb8988b07cb53f732a541b",
       "abi": [
         {
           "type": "constructor",
@@ -3959,7 +3959,7 @@
           ]
         }
       ],
-      "blockNumber": 2
+      "blockNumber": 9615514
     }
   }
 }

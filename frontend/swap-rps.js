@@ -2014,7 +2014,7 @@ async function loadAwaitingRevealGames() {
   }
 }
 
-// Load completed games (from tracked games)
+// Load completed games (query contract for all games where user is player2 and game is settled)
 async function loadCompletedGames() {
   if (!signer || !rpsContract) {
     return;
@@ -2022,12 +2022,20 @@ async function loadCompletedGames() {
 
   try {
     const userAddress = await signer.getAddress();
-    const trackedGames = getTakerGames();
-    const gamesListDiv = document.getElementById("completedGamesList");
+    const gamesListDiv = document.getElementById("takerCompletedGamesList");
     
-    if (!gamesListDiv) return;
+    if (!gamesListDiv) {
+      console.warn("takerCompletedGamesList div not found");
+      return;
+    }
 
-    if (!trackedGames || Object.keys(trackedGames).length === 0) {
+    log("🔍 Loading completed games from contract...");
+    
+    // Get the total number of games
+    const nextGameId = await rpsContract.nextGameId();
+    const totalGames = Number(nextGameId);
+    
+    if (totalGames === 0) {
       gamesListDiv.innerHTML = `
         <div class="bg-gray-50 border-2 border-gray-200 rounded-xl p-4">
           <p class="text-sm text-gray-600 text-center">No completed games yet</p>
@@ -2036,14 +2044,18 @@ async function loadCompletedGames() {
       return;
     }
 
-    const completedGames = [];
+    log(`📊 Checking ${totalGames} game(s) for completed games where you are player2...`);
     
-    // Check each tracked game
-    for (const [key, gameData] of Object.entries(trackedGames)) {
+    const completedGames = [];
+    const trackedGames = getTakerGames(); // For additional metadata
+    
+    // Check all games to find ones where user is player2 and game is settled
+    // Limit to last 100 games for performance (most recent games)
+    const startGameId = Math.max(0, totalGames - 100);
+    
+    for (let i = startGameId; i < totalGames; i++) {
       try {
-        if (!gameData.gameId || gameData.gameId === "0") continue;
-        
-        const game = await rpsContract.getGame(gameData.gameId);
+        const game = await rpsContract.getGame(i);
         const isArray = Array.isArray(game) || (typeof game === "object" && game.length !== undefined);
         const state = isArray ? game[8] : game.state;
         const player2 = isArray ? game[1] : game.player2;
@@ -2063,22 +2075,29 @@ async function loadCompletedGames() {
           const player1Move = Number(player1MoveRaw) - 1;
           const player2Move = Number(player2MoveRaw) - 1;
           
+          // Get additional metadata from tracked games if available
+          const gameKey = i.toString();
+          const trackedData = trackedGames[gameKey] || {};
+          
           completedGames.push({
-            gameId: gameData.gameId,
-            commitmentHash: gameData.commitmentHash,
+            gameId: i.toString(),
+            commitmentHash: trackedData.commitmentHash || null,
             winner: winner && winner !== ethers.ZeroAddress ? (winner.toLowerCase() === userAddress.toLowerCase() ? 2 : 1) : 0, // 0=tie, 1=player1, 2=player2
             player1Move: player1Move,
             player2Move: player2Move,
             createdAt: Number(createdAt),
             tokenAddress: tokenAddress,
             betAmount: betAmount,
-            swapAmount: gameData.swapAmount,
-            swapDirection: gameData.swapDirection,
-            timestamp: gameData.timestamp
+            swapAmount: trackedData.swapAmount || null,
+            swapDirection: trackedData.swapDirection || null,
+            timestamp: trackedData.timestamp || Number(createdAt)
           });
         }
       } catch (error) {
-        console.error(`Error checking game ${key}:`, error);
+        // Game might not exist (deleted after withdrawal), skip it
+        if (!error.message.includes("revert") && !error.message.includes("Game does not exist")) {
+          console.error(`Error checking game ${i}:`, error);
+        }
       }
     }
 
@@ -2129,6 +2148,18 @@ async function loadCompletedGames() {
       const date = new Date(game.createdAt * 1000);
       const dateStr = date.toLocaleString();
       
+      // Add withdraw button if taker won or it's a tie
+      const withdrawButton = (isWin || isTie) ? `
+        <div class="mt-3 pt-3 border-t ${borderClass}">
+          <button
+            onclick="withdrawPrize('${game.gameId}')"
+            class="w-full px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold rounded-lg hover:from-blue-700 hover:to-indigo-700 transform hover:scale-105 transition-all"
+          >
+            💰 Withdraw Prize
+          </button>
+        </div>
+      ` : '';
+      
       return `
         <div class="${bgClass} border-2 ${borderClass} rounded-xl p-4 mb-4">
           <div class="flex flex-col gap-2">
@@ -2156,6 +2187,7 @@ async function loadCompletedGames() {
               <span class="text-sm text-gray-600">Completed:</span>
               <span class="text-xs text-gray-500">${dateStr}</span>
             </div>
+            ${withdrawButton}
           </div>
         </div>
       `;
@@ -3342,8 +3374,16 @@ window.withdrawPrize = async function(gameId) {
     const receipt = await withdrawTx.wait();
     log(`✅ Prize withdrawn! Transaction confirmed in block ${receipt.blockNumber}`);
     
-    // Refresh games list
-    await loadMakerGames();
+    // Refresh games list - check which view is active
+    const makerView = document.getElementById("makerView");
+    const takerView = document.getElementById("takerView");
+    
+    if (makerView && !makerView.classList.contains("hidden")) {
+      await loadMakerGames();
+    }
+    if (takerView && !takerView.classList.contains("hidden")) {
+      await loadAllTakerGames();
+    }
   } catch (error) {
     log(`❌ Error withdrawing prize: ${error.message}`);
     console.error("Withdraw error:", error);
