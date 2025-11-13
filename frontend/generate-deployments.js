@@ -79,12 +79,32 @@ if (!existsSync(publicDir)) {
 }
 
 // Always write to both locations to ensure files exist in build output
-writeFileSync(rootPath, JSON.stringify(deployments, null, 2));
-writeFileSync(publicPath, JSON.stringify(deployments, null, 2));
+try {
+  writeFileSync(rootPath, JSON.stringify(deployments, null, 2));
+  console.log(`✅ Wrote deployments.json to ${rootPath}`);
+} catch (error) {
+  console.error(`❌ Error writing to ${rootPath}:`, error.message);
+  process.exit(1);
+}
+
+try {
+  writeFileSync(publicPath, JSON.stringify(deployments, null, 2));
+  console.log(`✅ Wrote deployments.json to ${publicPath}`);
+} catch (error) {
+  console.error(`❌ Error writing to ${publicPath}:`, error.message);
+  process.exit(1);
+}
+
+// Verify files were created
+if (!existsSync(publicPath)) {
+  console.error(`❌ CRITICAL: deployments.json was not created at ${publicPath}`);
+  process.exit(1);
+}
 
 console.log('✅ Generated deployments.json from environment variables');
 console.log(`   Chain ID: ${deployments.chainId}`);
 console.log(`   RPC URL: ${deployments.rpcUrl}`);
+console.log(`   Contracts found: ${Object.keys(deployments.contracts || {}).length}`);
 if (degenRPSAddress) console.log(`   DegenRPS: ${degenRPSAddress}`);
 if (token0Address) console.log(`   Token0: ${token0Address}`);
 if (token1Address) console.log(`   Token1: ${token1Address}`);
