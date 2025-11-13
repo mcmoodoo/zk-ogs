@@ -612,7 +612,7 @@ export async function loadActiveGames(
     activeGamesData.length = 0;
     gamesWithDetails.forEach(({ gameId, createdAt }) => {
       activeGamesData.push({
-        gameId: `game-${gameId}`,
+        gameId: gameId, // Use raw gameId to match the HTML element ID
         timestamp: createdAt,
         commitmentHash: gameId,
       });
