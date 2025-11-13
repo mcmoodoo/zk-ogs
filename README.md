@@ -6,7 +6,7 @@
 ![Vite](https://img.shields.io/badge/Vite-4.x-646CFF?logo=vite)
 ![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js)
 
-A zero-knowledge implementation of the classic rock-paper-scissors game where Player 1 commits their move, Player 2 joins with their move directly, and Player 1 reveals with ZK proofs to resolve the game on-chain. 
+A zero-knowledge implementation of the classic rock-paper-scissors game where Player 1 commits their move, Player 2 joins with their move directly, and Player 1 reveals with ZK proofs to resolve the game on-chain.
 
 ## Overview
 
@@ -147,6 +147,6 @@ The `raffle-pool/` directory contains work-in-progress code for integrating the 
 
 - **95% of swap funds** would execute a normal Uniswap swap
 - **5% of swap funds** would be escrowed into an RPS game
-- The winner of the RPS game would take the combined 5% contributions from both players
+- The winner of the RPS game would take the combined 10% contributions from both players
 
 This integration is currently in development and left for future exploration. The current implementation focuses on standalone RPS games with token betting (as seen in `/swap-rps`).

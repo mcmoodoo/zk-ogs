@@ -159,6 +159,7 @@ async function loadDeployments() {
     }
 
     log("✅ Deployments loaded");
+    await updateContractAddressDisplay();
   } catch (error) {
     log(`❌ Error loading deployments: ${error.message}`);
     throw error;
@@ -279,6 +280,54 @@ function normalizeChainId(chainId) {
     return chainId;
   }
   return chainId.toString();
+}
+
+// Update contract address display
+async function updateContractAddressDisplay() {
+  const displayDiv = document.getElementById("contractAddressDisplay");
+  if (!displayDiv) return;
+
+  // Try to get address from contract instance first, then from deployments
+  let contractAddress = rpsContract?.target || rpsContract?.address;
+
+  // If contract not initialized yet, try to get from deployments
+  if (!contractAddress && deployments?.contracts) {
+    contractAddress =
+      deployments.contracts.degenRPS?.address ||
+      deployments.contracts.rockPaperScissors?.address ||
+      RPS_ADDRESS;
+  }
+
+  if (contractAddress) {
+    let networkName = "Unknown";
+
+    // Try to get network from MetaMask first
+    if (provider) {
+      try {
+        const network = await provider.getNetwork();
+        networkName = getNetworkName(network.chainId.toString());
+      } catch {
+        // Fall back to deployments.json chainId
+        if (DEPLOYED_CHAIN_ID) {
+          networkName = getNetworkName(DEPLOYED_CHAIN_ID);
+        }
+      }
+    } else if (DEPLOYED_CHAIN_ID) {
+      // Use chainId from deployments.json if MetaMask not connected
+      networkName = getNetworkName(DEPLOYED_CHAIN_ID);
+    }
+
+    displayDiv.innerHTML = `
+      <p class="text-gray-600 text-xs flex flex-wrap items-center gap-2">
+        <span class="font-semibold">Contract Address (${networkName}):</span>
+        <span class="font-mono text-purple-600 break-all">${contractAddress}</span>
+      </p>
+    `;
+  } else {
+    displayDiv.innerHTML = `
+      <p class="text-gray-500 text-xs">Contract address will be loaded automatically...</p>
+    `;
+  }
 }
 
 // Ensure we're on the correct network
@@ -464,6 +513,7 @@ async function initializeContracts() {
     }
 
     log("✅ Contracts initialized");
+    await updateContractAddressDisplay();
   } catch (error) {
     log(`❌ Error initializing contracts: ${error.message}`);
   }
