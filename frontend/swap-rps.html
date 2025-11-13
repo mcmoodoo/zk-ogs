@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🔄 Swap RPS - Rock Paper Scissors with Swaps</title>
+  <title>🪨📄✂️ Degen RPS - Rock Paper Scissors with Swaps</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -12,9 +12,8 @@
     <!-- Header -->
     <div class="glass-card rounded-3xl p-8 text-center bounce-in">
       <h1 class="game-font text-5xl md:text-6xl font-black mb-4 gradient-text">
-        🔄 Swap RPS
+        🪨📄✂️ Degen RPS
       </h1>
-      <p class="text-gray-600 text-lg">Play Rock Paper Scissors with token swaps - 95% swapped, 5% for the winner!</p>
     </div>
 
     <!-- Connect Wallet -->
@@ -54,11 +53,6 @@
         <h2 class="game-font text-2xl font-bold mb-4 text-gray-800 flex items-center gap-2">
           <span class="text-3xl">✨</span> Create New Game
         </h2>
-        <div class="bg-blue-50 border-2 border-blue-200 rounded-xl p-3 mb-4">
-          <p class="text-sm text-blue-800">
-            <strong>Maker:</strong> Create a game by making a swap with your committed move. 95% will be swapped, 5% (less fees) will be held for the RPS prize pool.
-          </p>
-        </div>
 
         <!-- Move Selection -->
         <div class="mb-4">
@@ -155,12 +149,7 @@
             🔄 Refresh
           </button>
         </h2>
-        <div class="bg-purple-50 border-2 border-purple-200 rounded-xl p-3 mb-4">
-          <p class="text-sm text-purple-800">
-            <strong>Taker:</strong> Pick an active game and make an opposite swap with matching amount. 95% will be swapped, 5% (less fees) will be added to the prize pool.
-          </p>
-        </div>
-        <div id="takerAvailableGamesList" class="space-y-3">
+        <div id="takerAvailableGamesList">
           <div class="bg-gray-50 border-2 border-gray-200 rounded-xl p-4">
             <p class="text-sm text-gray-600 text-center">Click "Refresh" to see available games</p>
           </div>

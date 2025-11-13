@@ -3,6 +3,7 @@
 ## Quick Deploy (Using Existing deployments.json)
 
 The frontend will work on Vercel as-is if you commit `deployments.json` to your repo. Vercel will serve it as a static file. However, this is not recommended for production because:
+
 - Hard to manage different environments (dev/staging/prod)
 - Contract addresses are committed to git
 - Need to rebuild/redeploy when addresses change
@@ -10,6 +11,7 @@ The frontend will work on Vercel as-is if you commit `deployments.json` to your 
 ## Recommended: Using Environment Variables
 
 This approach allows you to:
+
 - Set different addresses for different environments
 - Keep sensitive RPC URLs out of git
 - Update addresses without code changes
@@ -29,6 +31,7 @@ VITE_TOKEN1_ADDRESS=0x83696c189589910d08640cf1c285e3b15eceefb7
 ### 2. Deploy
 
 The build process will automatically:
+
 - Generate `deployments.json` from environment variables
 - Preserve ABIs from existing deployments.json
 - Build the frontend with the correct addresses
@@ -36,6 +39,7 @@ The build process will automatically:
 ### 3. Local Development
 
 For local development, you can either:
+
 - Keep using `deployments.json` directly (no env vars needed)
 - Create `.env.local` with the same variables (see `.env.example`)
 
@@ -48,6 +52,7 @@ For local development, you can either:
 ## Alternative: Multiple Environments
 
 You can set different environment variables for:
+
 - **Production**: Mainnet or production testnet addresses
 - **Preview**: Staging/test addresses
 - **Development**: Localhost addresses
