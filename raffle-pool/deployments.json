@@ -738,7 +738,7 @@
       "blockNumber": 3
     },
     "hook": {
-      "address": "0x2bab0c009013e9113992d8951be0ecb4a26a4ac4",
+      "address": "0x63cb45a7d0dd1bf1cbcf9f6085db14bc57f70ac4",
       "abi": [
         {
           "type": "constructor",
@@ -754,6 +754,19 @@
         {
           "type": "function",
           "name": "BIPS_DENOMINATOR",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "DEFAULT_RPS_TIMEOUT",
           "inputs": [],
           "outputs": [
             {
@@ -1706,6 +1719,25 @@
         },
         {
           "type": "function",
+          "name": "commitmentToGameId",
+          "inputs": [
+            {
+              "name": "",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
           "name": "contributionsByAddress",
           "inputs": [
             {
@@ -1796,6 +1828,25 @@
               "name": "currency",
               "type": "address",
               "internalType": "Currency"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "getGameId",
+          "inputs": [
+            {
+              "name": "commitmentHash",
+              "type": "bytes32",
+              "internalType": "bytes32"
             }
           ],
           "outputs": [
@@ -2035,6 +2086,37 @@
         },
         {
           "type": "function",
+          "name": "linkGameId",
+          "inputs": [
+            {
+              "name": "commitmentHash",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "owner",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
           "name": "pendingSwaps",
           "inputs": [
             {
@@ -2208,6 +2290,58 @@
               "name": "commitmentHash",
               "type": "bytes32",
               "internalType": "bytes32"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "refundTimeout",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "rockPaperScissors",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "contract RockPaperScissors"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "setRefundTimeout",
+          "inputs": [
+            {
+              "name": "_refundTimeout",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "setRockPaperScissors",
+          "inputs": [
+            {
+              "name": "_rockPaperScissors",
+              "type": "address",
+              "internalType": "address"
             }
           ],
           "outputs": [],
@@ -2436,6 +2570,25 @@
             },
             {
               "name": "amount",
+              "type": "uint256",
+              "indexed": false,
+              "internalType": "uint256"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
+          "name": "RefundTimeoutUpdated",
+          "inputs": [
+            {
+              "name": "oldTimeout",
+              "type": "uint256",
+              "indexed": false,
+              "internalType": "uint256"
+            },
+            {
+              "name": "newTimeout",
               "type": "uint256",
               "indexed": false,
               "internalType": "uint256"
@@ -2693,6 +2846,527 @@
         }
       ],
       "blockNumber": 7
+    },
+    "verifier": {
+      "address": "0xb7f8bc63bbcad18155201308c8f3540b07f84f5e",
+      "abi": [
+        {
+          "type": "function",
+          "name": "verify",
+          "inputs": [
+            {
+              "name": "proof",
+              "type": "bytes",
+              "internalType": "bytes"
+            },
+            {
+              "name": "publicInputs",
+              "type": "bytes32[]",
+              "internalType": "bytes32[]"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "bool",
+              "internalType": "bool"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "error",
+          "name": "ProofLengthWrong",
+          "inputs": []
+        },
+        {
+          "type": "error",
+          "name": "PublicInputsLengthWrong",
+          "inputs": []
+        },
+        {
+          "type": "error",
+          "name": "ShpleminiFailed",
+          "inputs": []
+        },
+        {
+          "type": "error",
+          "name": "SumcheckFailed",
+          "inputs": []
+        }
+      ],
+      "blockNumber": 8
+    },
+    "rockPaperScissors": {
+      "address": "0xa51c1fc2f0d1a1b8494ed1fe312d7c3a78ed91c0",
+      "abi": [
+        {
+          "type": "constructor",
+          "inputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "authorizedHook",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "createGame",
+          "inputs": [
+            {
+              "name": "commitment",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "timeout",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "createGameForPlayer",
+          "inputs": [
+            {
+              "name": "commitment",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "timeout",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "player1",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "deployer",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "forfeitGame",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "gameCounter",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "games",
+          "inputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "player1",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "player2",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "status",
+              "type": "uint8",
+              "internalType": "enum RockPaperScissors.GameStatus"
+            },
+            {
+              "name": "player1Commitment",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "player1Move",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "player2Move",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "winner",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "createdAt",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "timeout",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "revealDeadline",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "getGame",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "tuple",
+              "internalType": "struct RockPaperScissors.Game",
+              "components": [
+                {
+                  "name": "gameId",
+                  "type": "uint256",
+                  "internalType": "uint256"
+                },
+                {
+                  "name": "player1",
+                  "type": "address",
+                  "internalType": "address"
+                },
+                {
+                  "name": "player2",
+                  "type": "address",
+                  "internalType": "address"
+                },
+                {
+                  "name": "status",
+                  "type": "uint8",
+                  "internalType": "enum RockPaperScissors.GameStatus"
+                },
+                {
+                  "name": "player1Commitment",
+                  "type": "bytes32",
+                  "internalType": "bytes32"
+                },
+                {
+                  "name": "player1Move",
+                  "type": "uint8",
+                  "internalType": "uint8"
+                },
+                {
+                  "name": "player2Move",
+                  "type": "uint8",
+                  "internalType": "uint8"
+                },
+                {
+                  "name": "winner",
+                  "type": "uint8",
+                  "internalType": "uint8"
+                },
+                {
+                  "name": "createdAt",
+                  "type": "uint256",
+                  "internalType": "uint256"
+                },
+                {
+                  "name": "timeout",
+                  "type": "uint256",
+                  "internalType": "uint256"
+                },
+                {
+                  "name": "revealDeadline",
+                  "type": "uint256",
+                  "internalType": "uint256"
+                }
+              ]
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "function",
+          "name": "joinGame",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "move2",
+              "type": "uint8",
+              "internalType": "uint8"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "resolveGame",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "move1",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "salt1",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "proof",
+              "type": "bytes",
+              "internalType": "bytes"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "setAuthorizedHook",
+          "inputs": [
+            {
+              "name": "_hook",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "setVerifier",
+          "inputs": [
+            {
+              "name": "_verifier",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "type": "function",
+          "name": "verifier",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "contract IUltraVerifier"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "type": "event",
+          "name": "GameCreated",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "indexed": true,
+              "internalType": "uint256"
+            },
+            {
+              "name": "player1",
+              "type": "address",
+              "indexed": true,
+              "internalType": "address"
+            },
+            {
+              "name": "commitment",
+              "type": "bytes32",
+              "indexed": false,
+              "internalType": "bytes32"
+            },
+            {
+              "name": "timeout",
+              "type": "uint256",
+              "indexed": false,
+              "internalType": "uint256"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
+          "name": "GameForfeited",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "indexed": true,
+              "internalType": "uint256"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
+          "name": "GameResolved",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "indexed": true,
+              "internalType": "uint256"
+            },
+            {
+              "name": "winner",
+              "type": "uint8",
+              "indexed": false,
+              "internalType": "uint8"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
+          "name": "MoveRevealed",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "indexed": true,
+              "internalType": "uint256"
+            },
+            {
+              "name": "player",
+              "type": "address",
+              "indexed": true,
+              "internalType": "address"
+            },
+            {
+              "name": "move",
+              "type": "uint8",
+              "indexed": false,
+              "internalType": "uint8"
+            },
+            {
+              "name": "salt",
+              "type": "bytes32",
+              "indexed": false,
+              "internalType": "bytes32"
+            }
+          ],
+          "anonymous": false
+        },
+        {
+          "type": "event",
+          "name": "PlayerJoined",
+          "inputs": [
+            {
+              "name": "gameId",
+              "type": "uint256",
+              "indexed": true,
+              "internalType": "uint256"
+            },
+            {
+              "name": "player2",
+              "type": "address",
+              "indexed": true,
+              "internalType": "address"
+            },
+            {
+              "name": "move2",
+              "type": "uint8",
+              "indexed": false,
+              "internalType": "uint8"
+            },
+            {
+              "name": "revealDeadline",
+              "type": "uint256",
+              "indexed": false,
+              "internalType": "uint256"
+            }
+          ],
+          "anonymous": false
+        }
+      ],
+      "blockNumber": 9
     }
   }
 }

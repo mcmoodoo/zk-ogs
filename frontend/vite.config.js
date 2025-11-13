@@ -15,6 +15,13 @@ export default defineConfig({
   ],
   build: {
     target: 'esnext',
+    rollupOptions: {
+      input: {
+        main: './index.html',
+        fund: './fund.html',
+        'swap-rps': './swap-rps.html',
+      },
+    },
   },
   optimizeDeps: {
     esbuildOptions: {
