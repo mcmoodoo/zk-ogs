@@ -15,6 +15,8 @@ The project includes two game modes:
 - **Basic RPS** (`/`): A simple rock-paper-scissors game where players commit and reveal moves using ZK proofs. No token betting required.
 - **Degen RPS** (`/swap-rps`): A token-betting version where players stake tokens on each game. The winner takes the escrowed tokens.
 
+📼 **DEMO VIDEO**: https://youtu.be/WvKBrJiDE2w
+
 ![screenshot](./public/images/screenshot.png)
 
 ### Game Flow
