@@ -488,7 +488,13 @@ window.withdrawPrize = async function (gameId) {
     const takerView = document.getElementById("takerView");
 
     if (makerView && !makerView.classList.contains("hidden")) {
-      await loadMakerGames();
+      await loadMakerGames(
+        signer,
+        rpsContract,
+        erc20ABI,
+        revealMakerMove,
+        withdrawPrize
+      );
     }
     if (takerView && !takerView.classList.contains("hidden")) {
       await loadAllTakerGamesHelper();
@@ -496,6 +502,54 @@ window.withdrawPrize = async function (gameId) {
   } catch (error) {
     log(`❌ Error withdrawing prize: ${error.message}`);
     console.error("Withdraw error:", error);
+  }
+};
+
+// Claim refund (for player 2 when player 1 fails to reveal)
+window.claimRefund = async function (gameId) {
+  if (!signer || !rpsContract) {
+    log("❌ Contracts not initialized");
+    return;
+  }
+
+  const button = document.getElementById(`refund-btn-${gameId}`);
+  if (button) {
+    button.disabled = true;
+    button.innerHTML = "⏳ Processing...";
+  }
+
+  try {
+    log(`💰 Claiming refund for game ${gameId}...`);
+    const refundTx = await rpsContract.refund(gameId);
+    log(`📤 Transaction sent: ${refundTx.hash}`);
+    const receipt = await refundTx.wait();
+    log(
+      `✅ Refund claimed! Transaction confirmed in block ${receipt.blockNumber}`
+    );
+
+    // Refresh games list - check which view is active
+    const makerView = document.getElementById("makerView");
+    const takerView = document.getElementById("takerView");
+
+    if (makerView && !makerView.classList.contains("hidden")) {
+      await loadMakerGames(
+        signer,
+        rpsContract,
+        erc20ABI,
+        revealMakerMove,
+        withdrawPrize
+      );
+    }
+    if (takerView && !takerView.classList.contains("hidden")) {
+      await loadAllTakerGamesHelper();
+    }
+  } catch (error) {
+    log(`❌ Error claiming refund: ${error.message}`);
+    console.error("Refund error:", error);
+    if (button) {
+      button.disabled = false;
+      button.innerHTML = "💰 Claim Refund";
+    }
   }
 };
 

@@ -947,7 +947,14 @@ export async function loadAwaitingRevealGames(
                 isOverdue
                   ? `
                 <div class="mt-2 p-2 bg-red-100 border border-red-300 rounded-lg">
-                  <p class="text-xs text-red-800 text-center">Player 1 failed to reveal. You can claim a refund!</p>
+                  <p class="text-xs text-red-800 text-center mb-2">Player 1 failed to reveal. You can claim a refund!</p>
+                  <button
+                    id="refund-btn-${gameId}"
+                    onclick="window.claimRefund('${gameId}')"
+                    class="w-full px-4 py-2 bg-gradient-to-r from-red-600 to-pink-600 text-white font-semibold rounded-lg hover:from-red-700 hover:to-pink-700 transform hover:scale-105 transition-all duration-200 shadow-md hover:shadow-lg text-sm"
+                  >
+                    💰 Claim Refund
+                  </button>
                 </div>
               `
                   : ""
