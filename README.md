@@ -6,7 +6,7 @@
 ![Vite](https://img.shields.io/badge/Vite-4.x-646CFF?logo=vite)
 ![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js)
 
-A zero-knowledge implementation of the classic rock-paper-scissors game where Player 1 commits their move, Player 2 joins with their move directly, and Player 1 reveals with ZK proofs to resolve the game on-chain. 
+A zero-knowledge implementation of the classic rock-paper-scissors game where Player 1 commits their move, Player 2 joins with their move directly, and Player 1 reveals with ZK proofs to resolve the game on-chain.
 
 ## Overview
 
@@ -43,17 +43,17 @@ The project includes two game modes:
 ## Game Flow
 
 ```
-Player 1                     Contract                    Player 2
-   |                            |                            |
-   |-- createGame(commitment) ->|                            |
-   |                            |                            |
-   |                            |<-- joinGame(move) ------|
-   |                            |    (move stored on-chain) |
-   |                            |                            |
-   |-- resolveGame(move+salt) ->|                            |
-   |     + ZK proof             |                            |
-   |                            |-- _resolveGame() ----------|
-   |<-- GameResolved event -----|                            |
+Player 1                  Contract                   Player 2
+   |                         |                          |
+   |-- createGame(commit) -->|                          |
+   |   (move + salt)         |                          |
+   |                         |<-- joinGame(move) -------|
+   |                         |    (stored on-chain)     |
+   |                         |                          |
+   |-- resolveGame(move,salt)|                          |
+   |   + player2 move ------>|                          |
+   |                         |-- GameResolved event --> |
+   |                         |                          |
 ```
 
 ## Setup
