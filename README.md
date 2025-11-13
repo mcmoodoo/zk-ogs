@@ -12,9 +12,9 @@ A Uniswap v4 hook that turns every swap into a chance to play a zero-knowledge r
 
 Each game unfolds alongside a Uniswap swap:
 
-- **Player A** creates a game during the hook’s pre-swap phase, escrowing 5% (configurable) of the swap amount and submitting a commitment to their move (`keccak256(move || salt)`).
+- **Player A** creates a game during the hook’s pre-swap phase, escrowing 5% (configurable) of the swap amount and submitting a commitment to it's move (`keccak256(move || salt)`) with a zk proof.
 - **Player B** joins any open game by matching the stake and submitting their clear-text move; no commitment step is required.
-- Once matched, **Player A** reveals their move plus salt along with a Noir-generated ZK proof that the outcome was computed correctly.
+- Once matched, **Player A** reveals their move with it's original move and salt and reveal the result.
 - The hook contract validates the commitment, verifies the ZK proof through the game manager contract, and pays the escrowed tokens to the winner (or slashes Player A if they fail to reveal before expiry).
 
 This flow keeps Player A’s move hidden until reveal, protects Player B from front-running, and ensures rewards are settled atomically with the swap.
