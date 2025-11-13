@@ -21,8 +21,8 @@ This approach allows you to:
 Go to your Vercel project settings → Environment Variables and add:
 
 ```
-VITE_CHAIN_ID=11155111
 VITE_RPC_URL=https://sepolia.infura.io/v3/YOUR_INFURA_KEY
+VITE_CHAIN_ID=11155111
 VITE_DEGEN_RPS_ADDRESS=0xfa214576764c87d21acb8988b07cb53f732a541b
 VITE_TOKEN0_ADDRESS=0xf0711ae8902822c8fa99f93e4d6db436d065c609
 VITE_TOKEN1_ADDRESS=0x83696c189589910d08640cf1c285e3b15eceefb7

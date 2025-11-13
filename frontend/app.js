@@ -52,7 +52,21 @@ async function initNoir() {
     if (!circuitResponse.ok) {
       throw new Error(`Failed to load circuit: ${circuitResponse.statusText}`);
     }
-    circuit = await circuitResponse.json();
+    // Check if response is actually JSON (not HTML error page)
+    const contentType = circuitResponse.headers.get("content-type");
+    const text = await circuitResponse.text();
+    if (!contentType || !contentType.includes("application/json")) {
+      if (
+        text.trim().startsWith("<!DOCTYPE") ||
+        text.trim().startsWith("<html")
+      ) {
+        throw new Error(
+          "Received HTML instead of JSON. /target/circuit.json may not exist or Vercel routing is misconfigured."
+        );
+      }
+      throw new Error(`Expected JSON but got ${contentType}`);
+    }
+    circuit = JSON.parse(text);
 
     log("Initializing Noir and Barretenberg...");
     noir = new Noir(circuit);
@@ -2243,7 +2257,21 @@ async function init() {
       );
 
       if (deploymentsResponse.ok) {
-        const deployments = await deploymentsResponse.json();
+        // Check if response is actually JSON (not HTML error page)
+        const contentType = deploymentsResponse.headers.get("content-type");
+        const text = await deploymentsResponse.text();
+        if (!contentType || !contentType.includes("application/json")) {
+          if (
+            text.trim().startsWith("<!DOCTYPE") ||
+            text.trim().startsWith("<html")
+          ) {
+            throw new Error(
+              "Received HTML instead of JSON. deployments.json may not exist or Vercel routing is misconfigured."
+            );
+          }
+          throw new Error(`Expected JSON but got ${contentType}`);
+        }
+        const deployments = JSON.parse(text);
         log(`📋 Loaded deployments.json`);
 
         // Store network configuration

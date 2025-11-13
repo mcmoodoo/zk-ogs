@@ -13,10 +13,11 @@ const degenRPSAddress = process.env.VITE_DEGEN_RPS_ADDRESS;
 const token0Address = process.env.VITE_TOKEN0_ADDRESS;
 const token1Address = process.env.VITE_TOKEN1_ADDRESS;
 
-// If no env vars are set, keep existing deployments.json (for local dev)
+// If no env vars are set, ensure we still have a valid deployments.json
+// This is important for Vercel builds where files must exist
 if (!chainId && !rpcUrl && !degenRPSAddress) {
-  console.log('⚠️  No environment variables found. Keeping existing deployments.json');
-  process.exit(0);
+  console.log('⚠️  No environment variables found. Using existing deployments.json or defaults');
+  // Don't exit - continue to ensure files are in the right place
 }
 
 // Load existing deployments.json to preserve ABIs and other contracts
@@ -26,11 +27,14 @@ try {
   if (existsSync(deploymentsPath)) {
     const existingContent = readFileSync(deploymentsPath, 'utf-8');
     existingDeployments = JSON.parse(existingContent);
+    console.log('✅ Loaded existing deployments.json');
   } else {
     console.log('📝 No existing deployments.json found, creating new one');
   }
 } catch (error) {
   console.log('⚠️  Error reading existing deployments.json:', error.message);
+  console.log('📝 Will create a new deployments.json with defaults');
+  existingDeployments = {};
 }
 
 // Build deployments object
@@ -38,28 +42,28 @@ const deployments = {
   chainId: chainId || existingDeployments.chainId || '11155111',
   rpcUrl: rpcUrl || existingDeployments.rpcUrl || 'https://sepolia.infura.io/v3/4656866d4b76456fb395cd6c1b744830',
   contracts: {
-    ...existingDeployments.contracts,
+    ...(existingDeployments.contracts || {}),
   }
 };
 
 // Update contract addresses from env vars if provided
 if (degenRPSAddress) {
   deployments.contracts.degenRPS = {
-    ...existingDeployments.contracts?.degenRPS,
+    ...(existingDeployments.contracts?.degenRPS || {}),
     address: degenRPSAddress
   };
 }
 
 if (token0Address) {
   deployments.contracts.token0 = {
-    ...existingDeployments.contracts?.token0,
+    ...(existingDeployments.contracts?.token0 || {}),
     address: token0Address
   };
 }
 
 if (token1Address) {
   deployments.contracts.token1 = {
-    ...existingDeployments.contracts?.token1,
+    ...(existingDeployments.contracts?.token1 || {}),
     address: token1Address
   };
 }
@@ -74,10 +78,8 @@ if (!existsSync(publicDir)) {
   mkdirSync(publicDir, { recursive: true });
 }
 
-// Write to root (for development and git)
+// Always write to both locations to ensure files exist in build output
 writeFileSync(rootPath, JSON.stringify(deployments, null, 2));
-
-// Write to public (for Vite build output - files in public/ are copied to dist/)
 writeFileSync(publicPath, JSON.stringify(deployments, null, 2));
 
 console.log('✅ Generated deployments.json from environment variables');
